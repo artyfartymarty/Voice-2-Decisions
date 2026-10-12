@@ -1,0 +1,74 @@
+{% extends "copilot/base.html" %}
+{% block content %}
+<div class="card">
+  <h1>Upload a call</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    <label for="title">Title</label>
+    <input type="text" id="title" name="title" placeholder="Acme renewal call">
+    <label for="audio">Recording (wav, mp3, m4a, webm…). For a two-leg call, this is the first leg.</label>
+    <input type="file" id="audio" name="audio" accept="audio/*,video/webm">
+    <label for="audio_b">Second leg (optional). Both legs are mixed down to one mono track.</label>
+    <input type="file" id="audio_b" name="audio_b" accept="audio/*,video/webm">
+    <button type="submit">Transcribe and find decisions</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Live from the microphone</h2>
+  <p class="muted">Records in short chunks and sends each one for transcription. Decisions show up as soon as a sentence ends.</p>
+  <button id="live-start" type="button">Start live call</button>
+  <button id="live-stop" type="button" class="secondary" disabled>Stop</button>
+  <p id="live-status" class="muted"></p>
+</div>
+
+<div class="card">
+  <h2>Recent calls</h2>
+  {% if calls %}
+  <table>
+    <tr><th>Call</th><th>Status</th><th>Length</th><th>When</th></tr>
+    {% for c in calls %}
+    <tr><td><a href="{% url 'call_detail' c.pk %}">{{ c }}</a></td><td>{{ c.status }}</td><td>{{ c.duration|floatformat:0 }} s</td><td class="muted">{{ c.created_at|date:"Y-m-d H:i" }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">No calls yet.</p>{% endif %}
+</div>
+
+<script>
+(() => {
+  const CHUNK_MS = 5000;
+  const startBtn = document.getElementById('live-start'), stopBtn = document.getElementById('live-stop'), status = document.getElementById('live-status');
+  let stream, callId, running = false;
+
+  async function recordChunk() {
+    if (!running) return;
+    const rec = new MediaRecorder(stream);
+    const parts = [];
+    rec.ondataavailable = e => e.data.size && parts.push(e.data);
+    rec.onstop = async () => {
+      const final = !running;
+      const form = new FormData();
+      form.append('audio', new Blob(parts, { type: rec.mimeType }), 'chunk.webm');
+      if (final) form.append('final', 'true');
+      const r = await fetch(`/api/calls/${callId}/partial/`, { method: 'POST', body: form });
+      const data = await r.json();
+      status.textContent = data.error ? `Error: ${data.error}` : `Sent a chunk, ${data.new_moments.length} new moment(s).`;
+      if (final) window.location = `/calls/${callId}/`;
+    };
+    rec.start();
+    setTimeout(() => { rec.stop(); if (running) recordChunk(); }, CHUNK_MS);
+  }
+
+  startBtn.onclick = async () => {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const r = await fetch('/api/calls/live/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: document.getElementById('title').value || 'Live call' }) });
+    callId = (await r.json()).id;
+    running = true; startBtn.disabled = true; stopBtn.disabled = false;
+    status.innerHTML = `Recording. <a href="/calls/${callId}/" target="_blank">Watch the call page</a>.`;
+    recordChunk();
+  };
+  stopBtn.onclick = () => { running = false; stopBtn.disabled = true; status.textContent = 'Finishing the last chunk…'; stream.getTracks().forEach(t => t.stop()); };
+})();
+</script>
+{% endblock %}

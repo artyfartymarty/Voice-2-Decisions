@@ -1,0 +1,29 @@
+# CPU-safe base. On a GPU machine add the GPU overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+services:
+  web:
+    build: .
+    image: voice2decisions:latest
+    env_file: .env
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - v2d-data:/data   # sqlite db + Hugging Face model cache, survives rebuilds
+    restart: unless-stopped
+
+  # Test runner: docker compose run --rm test            (fast suite, no GPU or model needed)
+  #              docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm -e RUN_GPU_TESTS=1 test
+  test:
+    image: voice2decisions:latest
+    profiles: ["test"]
+    environment:
+      ASR_BACKEND: fake
+      DATA_DIR: /data
+      HF_HOME: /data/hf
+      SQLITE_PATH: /tmp/test.sqlite3
+    volumes:
+      - v2d-data:/data
+    command: ["pytest", "-v", "-rs"]
+
+volumes:
+  v2d-data:

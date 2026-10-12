@@ -1,0 +1,19 @@
+# GPU overlay: needs the NVIDIA driver + NVIDIA Container Toolkit on the host
+# (Docker Desktop on Windows/WSL2 has this built in).
+services:
+  web:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  test:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

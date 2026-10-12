@@ -1,0 +1,35 @@
+{% extends "copilot/base.html" %}
+{% block title %}{{ call }} · Voice-2-Decisions{% endblock %}
+{% block content %}
+<div class="card">
+  <h1>{{ call }}</h1>
+  <p class="muted">Status: <span id="status">{{ call.status }}</span> · {{ call.duration|floatformat:1 }} s{% if call.language %} · {{ call.language }}{% endif %} · <a href="{% url 'api_summary' call.pk %}">summary JSON</a> · <a href="{% url 'api_call' call.pk %}">full JSON</a></p>
+  {% if call.error %}<p class="error">{{ call.error }}</p>{% endif %}
+  <p><b>{{ summary.headline }}</b></p>
+  <div class="grid">
+    {% for kind, n in summary.counts.items %}<div class="stat k-{{ kind }}"><b>{{ n }}</b>{% if kind == "action_item" %}action item{% elif kind == "key_moment" %}key moment{% else %}{{ kind }}{% endif %}</div>{% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Moments</h2>
+  <div id="moments">
+  {% for m in call.moments.all %}
+    <div class="moment">
+      <span class="tag k-{{ m.kind }}">{{ m.kind }}</span>
+      {% if m.start is not None %}<span class="muted">{{ m.start|floatformat:1 }} s</span>{% endif %}
+      <div>{{ m.text }}</div>
+      <div class="muted">→ {{ m.tool_name }} ({{ m.tool_status }}){% if m.owner %} · owner: {{ m.owner }}{% endif %}{% if m.due %} · due: {{ m.due }}{% endif %}</div>
+    </div>
+  {% empty %}<p class="muted">Nothing detected yet.</p>{% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Transcript</h2>
+  <p id="transcript">{{ call.transcript|default:"(empty)" }}</p>
+  {% if call.pending_text %}<p class="muted">Waiting for the sentence to finish: “{{ call.pending_text }}”</p>{% endif %}
+</div>
+
+{% if call.status == "live" %}<script>setTimeout(() => location.reload(), 3000);</script>{% endif %}
+{% endblock %}

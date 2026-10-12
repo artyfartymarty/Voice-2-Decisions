@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Voice-2-Decisions{% endblock %}</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --text:#1d1d1b; --muted:#6b6b66; --line:#e3e2dc; --accent:#2f6f4f;
+          --decision:#2f6f4f; --action_item:#2557a7; --risk:#b3412b; --question:#8a5a00; --key_moment:#6b3fa0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --card:#1f1f1d; --text:#ecebe6; --muted:#a3a29b; --line:#33332f; --accent:#6cc497;
+            --decision:#6cc497; --action_item:#7aa7f0; --risk:#f08a74; --question:#e0b153; --key_moment:#bb95ea; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; }
+  header a { color:var(--text); text-decoration:none; font-weight:650; }
+  header span { color:var(--muted); font-size:13px; }
+  main { max-width:960px; margin:0 auto; padding:20px 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  h1 { font-size:22px; margin:0 0 12px; } h2 { font-size:16px; margin:0 0 10px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:8px 0 4px; }
+  input[type=text], input[type=file] { width:100%; padding:7px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; font-weight:600; cursor:pointer; margin-top:12px; }
+  button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  table { width:100%; border-collapse:collapse; } td, th { text-align:left; padding:6px 4px; border-bottom:1px solid var(--line); }
+  a { color:var(--accent); }
+  .muted { color:var(--muted); font-size:13px; }
+  .tag { display:inline-block; font-size:12px; font-weight:600; padding:1px 8px; border-radius:99px; border:1px solid currentColor; }
+  .k-decision { color:var(--decision); } .k-action_item { color:var(--action_item); } .k-risk { color:var(--risk); }
+  .k-question { color:var(--question); } .k-key_moment { color:var(--key_moment); }
+  .moment { padding:8px 0; border-bottom:1px solid var(--line); }
+  .moment:last-child { border-bottom:0; }
+  .error { color:var(--risk); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
+  .stat { border:1px solid var(--line); border-radius:8px; padding:8px 10px; } .stat b { font-size:20px; display:block; }
+</style>
+</head>
+<body>
+<header><a href="{% url 'index' %}">Voice-2-Decisions</a><span>Nemotron ASR → winnow → tools</span></header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>
