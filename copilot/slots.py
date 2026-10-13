@@ -21,6 +21,9 @@ REASK = re.compile(
     r"|what was (the|that|your)( tail)?( number)?( again)?|again\?)", re.IGNORECASE)
 TAIL_TALK = re.compile(r"\b(tail|registration|aircraft|plane|jet)\b", re.IGNORECASE)
 TAIL_WORDS = re.compile(r"\b(tail|registration|reg|number|that)\b", re.IGNORECASE)
+# The caller fixing what they just said, mid-sentence: "bravo delta, sorry I meant bravo tango", "scratch that".
+SELF_CORRECT = re.compile(r"\b(i mean|i meant|sorry|no wait|wait|scratch that|actually|correction|make that|rather"
+                          r"|forget (?:that|it|the \w+))\b", re.IGNORECASE)
 CORRECTION = re.compile(r"\b(no|not|correction|i mean|actually|sorry it'?s|that'?s)\b", re.IGNORECASE)
 
 
@@ -39,15 +42,23 @@ def _confidence(reg: str, clause: str, run, slot: dict) -> float:
     return round(min(conf, 0.99), 2)
 
 
-def update(slot: dict, clause: str, speaker: str, extractor, customer: str | None) -> list[dict]:
+def update(slot: dict, clause: str, speaker: str, extractor, customer: str | None, _base: str | None = None) -> list[dict]:
     """Feed one clause. Returns events: {"type": "validate", ...} or {"type": "prompt", "message": ...}."""
+    # A self-correction inside the clause ("bravo delta, sorry I meant bravo tango", "five one two, scratch that,
+    # November eight eight..."): only what follows the last cue counts, so the abandoned version is never committed;
+    # what came before it is the base a partial fix ("I meant bravo tango") is applied to.
+    cues = list(SELF_CORRECT.finditer(clause)) if _base is None else []
+    if cues and symbol_runs(clause[cues[-1].end():]):
+        before = [r.symbols for r in symbol_runs(clause[:cues[-1].start()]) if r.phonetic or registration_country(r.symbols)]
+        if before:
+            return update(slot, clause[cues[-1].end():], speaker, extractor, customer, _base=max(before, key=len))
     if REASK.search(clause) and TAIL_WORDS.search(clause):
         slot["pending"] = True
     known = extractor.icaos | set(extractor.iata) | set(extractor.customers)
-    runs = [r for r in symbol_runs(clause) if r.symbols not in known and len(r.symbols) >= 2]
+    runs = [r for r in symbol_runs(clause) if r.symbols not in known and (len(r.symbols) >= 2 or _base is not None)]
     # Only spelling-like runs count unless we're expecting a tail: avoids dates ("November three") and stray letters.
     # "November" alone is not tail talk (it's also a month); a correction right after a tail is.
-    tail_context = (bool(TAIL_TALK.search(clause)) or slot["pending"] or bool(slot["partial"])
+    tail_context = (_base is not None or bool(TAIL_TALK.search(clause)) or slot["pending"] or bool(slot["partial"])
                     or bool(slot["value"] and CORRECTION.search(clause)))
     runs = [r for r in runs if r.phonetic or registration_country(r.symbols)]
     runs = [r for r in runs if tail_context or (registration_country(r.symbols) and len(r.symbols) >= 4)]
@@ -56,11 +67,16 @@ def update(slot: dict, clause: str, speaker: str, extractor, customer: str | Non
 
     good = [r for r in runs if not r.negated]
     bad = [r for r in runs if r.negated]
-    base = slot["value"] or slot["partial"]
+    base = _base or slot["value"] or slot["partial"]
     run = max(good or runs, key=lambda r: len(r.symbols))
     candidate, how = run.symbols, "heard"
 
-    if bad and good and base and CORRECTION.search(clause):
+    if _base is not None and not registration_country(candidate) and len(candidate) < len(base) \
+            and registration_country(base[: len(base) - len(candidate)] + candidate):
+        candidate, how = base[: len(base) - len(candidate)] + candidate, "corrected"  # "...I meant bravo tango"
+    elif _base is not None:
+        how = "restated" if registration_country(candidate) else how
+    elif bad and good and base and CORRECTION.search(clause):
         wrong, right = bad[0].symbols, good[0].symbols
         if wrong in base:
             candidate, how = base.replace(wrong, right, 1), "corrected"
@@ -102,7 +118,9 @@ def update(slot: dict, clause: str, speaker: str, extractor, customer: str | Non
     # Incomplete: keep it, and tell the agent what to ask for.
     slot.update(partial=candidate, partial_by=speaker, pending=False)
     suggestion = sorted(t for t in fleet if t.endswith(candidate) or candidate in t)
-    msg = f"Tail number incomplete: heard \"{run.heard}\" ({candidate}). Ask the caller to repeat the full tail number."
+    msg = (f"Caller corrected the tail mid-sentence and it doesn't add up (heard \"{run.heard}\" after \"{_base}\"). "
+           "Read the tail back to them and confirm it." if _base is not None else
+           f"Tail number incomplete: heard \"{run.heard}\" ({candidate}). Ask the caller to repeat the full tail number.")
     if len(suggestion) == 1:
         msg += f" On file for this customer: {suggestion[0]}."
     if candidate not in slot["prompted"]:

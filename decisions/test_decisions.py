@@ -104,6 +104,29 @@ class Engine(unittest.TestCase):
         call.feed("caller", "Sorry, November eight eight November whiskey.")
         self.assertEqual(call.variables["tail_number"]["value"], "N88NW")
 
+    def test_tail_self_corrections(self):
+        cases = [  # (lines, tail committed or None, text expected in the last prompt)
+            (["Tail number November five one two bravo delta.", "No, bravo tango, not bravo delta."], "N512BT", None),
+            (["Tail number November five one two bravo delta, sorry I meant bravo tango."], "N512BT", None),
+            (["Tail is November five one two, scratch that, November eight eight November whiskey."], "N88NW", None),
+            (["Tail number November five one two bravo... no wait, November eight eight November whiskey."], "N88NW", None),
+            (["Tail number November eight eight November whiskey.",
+              "Sorry, that's wrong, it's November seven seven zero zero whiskey."], "N7700W", None),
+            # doesn't add up: nothing committed, the agent reads it back (and the fallback model may be asked)
+            (["Tail is November eight eight, oh wait forget the November, I meant tango eight eight November whiskey."],
+             None, "Read the tail back"),
+        ]
+        for lines, tail, prompt in cases:
+            call = Call("t", EXTRACTOR, RuleDecider())
+            call.feed("caller", "Northwind, account 204511.")
+            prompts = [p for line in lines for p in call.feed("caller", line)["prompts"]]
+            self.assertEqual(call.variables.get("tail_number", {}).get("value"), tail, lines)
+            if prompt:
+                self.assertIn(prompt, prompts[-1])
+        call = Call("t", EXTRACTOR, RuleDecider())  # one-letter fix, no fleet to check against
+        call.feed("caller", "Tail number November eight eight November whiskey, I mean Victor.")
+        self.assertEqual(call.variables["tail_number"]["value"], "N88NV")
+
     def test_invalid_n_numbers_are_rejected(self):
         call = Call("t", EXTRACTOR, RuleDecider())
         call.feed("caller", "Tail number November zero one two three.")  # N-numbers never start with 0
