@@ -1,65 +1,87 @@
 {% extends "copilot/base.html" %}
 {% block title %}{{ call }} · Voice-2-Decisions{% endblock %}
+{% block main_class %} class="wide"{% endblock %}
 {% block content %}
 <div class="card">
-  <h1>{{ call }}</h1>
-  <p class="muted">Status: <span id="status">{{ call.status }}</span> · {{ call.duration|floatformat:1 }} s{% if call.language %} · {{ call.language }}{% endif %} · <a href="{% url 'api_summary' call.pk %}">summary JSON</a> · <a href="{% url 'api_call' call.pk %}">full JSON</a></p>
+  <h1>{% if call.status == "live" %}<span class="live-dot" id="live-dot" aria-hidden="true"></span>{% endif %}{{ call }}</h1>
+  <p class="muted" style="margin:0">Status: <span id="status">{{ call.status }}</span> · {{ call.duration|floatformat:1 }} s{% if call.language %} · {{ call.language }}{% endif %} · <a href="{% url 'api_summary' call.pk %}">summary JSON</a> · <a href="{% url 'api_call' call.pk %}">full JSON</a></p>
   {% if call.error %}<p class="error">{{ call.error }}</p>{% endif %}
-  <p><b>{{ summary.headline }}</b></p>
-  <div class="grid">
-    {% for kind, label, n in counts %}<div class="stat k-{{ kind }}"><b>{{ n }}</b>{{ label }}</div>{% endfor %}
+</div>
+
+{% include "copilot/panels/summary.html" %}
+
+<div class="call-grid">
+  <div>
+    {% include "copilot/panels/slot.html" %}
+    {% include "copilot/panels/who.html" %}
+    {% include "copilot/panels/prompts.html" %}
+  </div>
+  <div class="sticky">
+    {% include "copilot/panels/transcript.html" %}
   </div>
 </div>
 
-{% if summary.use_cases %}
 <div class="card">
-  <h2>Use cases</h2>
-  <table>
-    <tr><th>Who</th><th>Want to see</th><th>Outcome</th><th>Category</th></tr>
-    {% for c in summary.use_cases %}
-    <tr><td>{{ c.who }}</td><td>{{ c.want_to_see }}<br><span class="muted">Sent to: {{ c.alerts }}</span></td><td>{{ c.outcome }}</td><td><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td></tr>
-    {% endfor %}
-  </table>
-</div>
-{% endif %}
-
-<div class="card">
-  <h2>Moments</h2>
-  <div id="moments">
-  {% for m in call.moments.all %}
-    <div class="moment">
-      <span class="tag k-{{ m.kind }}">{{ m.kind }}</span>
-      {% if m.start is not None %}<span class="muted">{{ m.start|floatformat:1 }} s</span>{% endif %}
-      {% if m.speaker %}<span class="muted">· {{ m.role }}</span>{% endif %}
-      <div>{{ m.text }}</div>
-      <div class="muted">→ {{ m.tool_name }} ({{ m.tool_status }}){% if m.owner %} · owner: {{ m.owner }}{% endif %}{% if m.due %} · due: {{ m.due }}{% endif %}</div>
-      {% with r=m.tool_result %}
-      {% if m.kind == "quote_request" %}
-        <div class="prompt">{% if r.found %}<b>{{ r.customer }}</b> at <b>{{ r.icao }}</b> ({{ r.fbo }}): offer <b>{{ r.margin_floor_gppg }}–{{ r.current_gppg }} GPPG</b>, {{ r.addressable_volume_gal|floatformat:0 }} gal addressable of {{ r.total_volume_gal|floatformat:0 }} P12M. Dispatcher alerted.
-          {% if r.note %}<br>{{ r.note }}{% endif %}{% for line in r.location_info %}<br><span class="muted">{{ line }}</span>{% endfor %}
-        {% else %}{{ r.customer }} at {{ r.icao }}: {{ r.note }}{% endif %}</div>
-      {% elif m.kind == "dispute_risk" %}
-        <div class="prompt"><b>{{ r.prompt_agent }}</b><br>Add to quote: “{{ r.quote_wording }}”</div>
-      {% elif m.kind == "tail_number" %}
-        <div class="prompt">Tail <b>{{ r.tail_number }}</b> ({{ r.country }}, confidence {{ r.confidence }}){% if m.tool_args.how == "corrected" %}, corrected from {{ m.tool_args.replaces }}{% endif %}. {{ r.note }}</div>
-      {% elif m.kind == "agent_prompt" %}
-        <div class="prompt"><b>Ask the caller:</b> {{ r.message }}</div>
-      {% elif m.kind == "sentiment_shift" %}
-        <div class="prompt"><b>{{ r.agent_prompt }}</b><br>Managers alerted: {% if r.speaker %}{{ r.speaker }} {% endif %}sentiment {{ r.avg_sentiment }} over the last few lines{% if r.scored_by %} (scored by {{ r.scored_by }}){% endif %}.</div>
-      {% endif %}
-      {% endwith %}
+  <details>
+    <summary>All moments and tool calls ({{ call.moments.count }})</summary>
+    <div id="moments">
+    {% for m in call.moments.all %}
+      <div class="moment">
+        <span class="tag k-{{ m.kind }}">{{ m.kind }}</span>
+        {% if m.start is not None %}<span class="muted">{{ m.start|floatformat:1 }} s</span>{% endif %}
+        {% if m.speaker %}<span class="muted">· {{ m.role }}</span>{% endif %}
+        <div>{{ m.text }}</div>
+        <div class="muted">→ {{ m.tool_name }} ({{ m.tool_status }}){% if m.owner %} · owner: {{ m.owner }}{% endif %}{% if m.due %} · due: {{ m.due }}{% endif %}</div>
+      </div>
+    {% empty %}<p class="muted">Nothing detected yet.</p>{% endfor %}
     </div>
-  {% empty %}<p class="muted">Nothing detected yet.</p>{% endfor %}
-  </div>
+  </details>
 </div>
 
-<div class="card">
-  <h2>Transcript</h2>
-  {% for s in call.segments.all %}
-    <p class="turn"><span class="muted">{{ s.start|floatformat:1 }} s{% if s.speaker %} · <b>{{ s.role }}</b>{% if s.role != s.speaker %} ({{ s.speaker }}){% endif %}{% endif %}</span><br>{{ s.text }}</p>
-  {% empty %}<p class="muted">(empty)</p>{% endfor %}
-  {% if call.pending_text %}<p class="muted">Waiting for the sentence to finish: “{{ call.pending_text }}”</p>{% endif %}
-</div>
+{% if call.status == "live" %}
+<script>
+(() => {
+  // Live call: swap the server-rendered panels in place. Refreshes on each gateway WebSocket message when one is
+  // configured, and polls as a fallback; a 204 means nothing changed since `version`.
+  const url = "{% url 'call_panels' call.pk %}";
+  let version = "{{ version|escapejs }}", busy = false, timer;
+  const seen = new Set([...document.querySelectorAll('.pcard[data-id]')].map(el => el.dataset.id));
 
-{% if call.status == "live" %}<script>setTimeout(() => location.reload(), 3000);</script>{% endif %}
+  async function refresh() {
+    if (busy) return;
+    busy = true;
+    try {
+      const r = await fetch(`${url}?v=${encodeURIComponent(version)}`);
+      if (r.status !== 200) return;
+      const data = await r.json();
+      version = data.version;
+      const box = document.querySelector('[data-scroll]');
+      const atBottom = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+      for (const [name, html] of Object.entries(data.panels)) {
+        const el = document.getElementById(`panel-${name}`);
+        if (el) el.outerHTML = html;
+      }
+      document.querySelectorAll('.pcard[data-id]').forEach(el => {
+        if (!seen.has(el.dataset.id)) { el.classList.add('new'); seen.add(el.dataset.id); }
+      });
+      const nbox = document.querySelector('[data-scroll]');
+      if (nbox && atBottom) nbox.scrollTop = nbox.scrollHeight;
+      document.getElementById('status').textContent = data.status;
+      if (data.status !== 'live') {
+        clearInterval(timer);
+        document.getElementById('live-dot')?.remove();
+      }
+    } catch (e) { /* network blip: next tick retries */ } finally { busy = false; }
+  }
+
+  const ws = "{{ gateway_ws_url|escapejs }}";
+  if (ws) {
+    try { new WebSocket(ws).onmessage = ev => { if (!ev.data || ev.data.includes('{{ call.pk }}')) refresh(); }; } catch (e) {}
+  }
+  const box = document.querySelector('[data-scroll]');
+  if (box) box.scrollTop = box.scrollHeight;
+  timer = setInterval(refresh, {{ refresh_ms }});
+})();
+</script>
+{% endif %}
 {% endblock %}

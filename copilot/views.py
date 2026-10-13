@@ -1,11 +1,13 @@
 import json
 
-from django.http import Http404, HttpResponseBadRequest, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from . import extract, pipeline, tools
+from . import callview, extract, pipeline, tools
 from .asr import get_backend
 from .diarize import get_diarizer
 from .audio import AudioDecodeError
@@ -45,12 +47,50 @@ def index(request):
     return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50]})
 
 
+def _call_page_context(call) -> dict:
+    summary = pipeline.call_summary(call)
+    return {
+        "call": call, "summary": summary,
+        "counts": [(kind, kind.replace("_", " "), n) for kind, n in summary["counts"].items()],
+        "who": callview.who_is_calling(call), "slot": callview.slot_hint(call),
+        "groups": callview.prompt_cards(call), "turns": callview.transcript(call),
+        "version": callview.version(call),
+    }
+
+
+# Panels of the call page that the live script swaps in place; each is its own template under copilot/panels/.
+PANELS = ("who", "slot", "prompts", "transcript", "summary")
+
+
 @require_GET
 def call_detail(request, pk):
     call = get_object_or_404(Call, pk=pk)
-    summary = pipeline.call_summary(call)
-    counts = [(kind, kind.replace("_", " "), n) for kind, n in summary["counts"].items()]
-    return render(request, "copilot/call_detail.html", {"call": call, "summary": summary, "counts": counts})
+    ctx = _call_page_context(call)
+    ctx.update(gateway_ws_url=settings.GATEWAY_WS_URL, refresh_ms=settings.LIVE_REFRESH_MS)
+    return render(request, "copilot/call_detail.html", ctx)
+
+
+@require_GET
+def call_panels(request, pk):
+    """The call page's panels as server-rendered HTML, for the live script. ?v=<version> -> 204 when nothing changed."""
+    call = get_object_or_404(Call, pk=pk)
+    version = callview.version(call)
+    if request.GET.get("v") == version:
+        return HttpResponse(status=204)
+    ctx = _call_page_context(call)
+    return JsonResponse({"version": version, "status": call.status,
+                         "panels": {name: render_to_string(f"copilot/panels/{name}.html", ctx, request) for name in PANELS}})
+
+
+@require_GET
+def manager_alerts(request):
+    """Managers' and dispatchers' view: sentiment and quote alerts across calls, newest first. ?live=1 for live calls only."""
+    live_only = request.GET.get("live") == "1"
+    ctx = {"alerts": callview.manager_alerts(live_only=live_only), "live_only": live_only,
+           "gateway_ws_url": settings.GATEWAY_WS_URL, "refresh_ms": settings.LIVE_REFRESH_MS}
+    if request.GET.get("partial") == "1":
+        return render(request, "copilot/panels/alerts.html", ctx)
+    return render(request, "copilot/alerts.html", ctx)
 
 
 # --- JSON API (csrf-exempt: called by scripts, the live recorder and other services) ---

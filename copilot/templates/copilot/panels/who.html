@@ -1,0 +1,16 @@
+<div class="card who" id="panel-who">
+  <h2>Who's calling</h2>
+  {% if who.customer_name %}
+  <dl>
+    <dt>Customer</dt><dd><b>{{ who.customer_name }}</b> <span class="muted">#{{ who.customer_number }}{% if who.customer_source %} · {{ who.customer_source }}{% endif %}</span></dd>
+    {% if who.ani %}<dt>Phone</dt><dd>{{ who.ani }}</dd>{% endif %}
+    <dt>Location</dt><dd>{% if who.icao %}<b>{{ who.icao }}</b>{% if who.fbo %} · {{ who.fbo }}{% endif %}{% if who.on_file_here is False %} <span class="error">· no volume on file here</span>{% endif %}{% else %}<span class="muted">not heard yet</span>{% endif %}</dd>
+    {% if who.other_locations %}<dt>Also flies</dt><dd>{{ who.other_locations|join:", " }}</dd>{% endif %}
+    <dt>Tail</dt><dd>{% if who.tail_number %}<b>{{ who.tail_number }}</b>{% else %}<span class="muted">not confirmed</span>{% endif %}</dd>
+    <dt>Wants</dt><dd>{% if who.quote_intent %}a fuel quote{% else %}<span class="muted">not clear yet</span>{% endif %}</dd>
+  </dl>
+  {% else %}
+  <p class="muted">Customer not identified yet.{% if who.icao %} Location: <b>{{ who.icao }}</b>{% if who.fbo %} · {{ who.fbo }}{% endif %}.{% endif %}{% if who.ani %} Calling from {{ who.ani }}.{% endif %} Ask for the account number or company name.</p>
+  {% endif %}
+  {% if who.roles %}<p class="muted" style="margin:8px 0 0">Speakers: {% for spk, role in who.roles.items %}{{ spk }} = {{ role }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if who.roles_confident is False %} (guessed, not much to go on yet){% endif %}</p>{% endif %}
+</div>

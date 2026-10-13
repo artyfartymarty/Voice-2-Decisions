@@ -100,6 +100,10 @@ ADDRESSABLE_CHECK_RATIO = float(os.environ.get("ADDRESSABLE_CHECK_RATIO", "0.5")
 TAIL_MIN_CONFIDENCE = float(os.environ.get("TAIL_MIN_CONFIDENCE", "0.8"))
 # Dispute guidance fires for locations with at least this many disputes in their private notes.
 DISPUTE_MIN_COUNT = int(os.environ.get("DISPUTE_MIN_COUNT", "3"))
+# Optional: a WebSocket that announces call updates (the gateway's events stream). When set, the call page and the
+# alert view refresh as soon as a message arrives; otherwise they poll every LIVE_REFRESH_MS while a call is live.
+GATEWAY_WS_URL = os.environ.get("GATEWAY_WS_URL", "")
+LIVE_REFRESH_MS = int(os.environ.get("LIVE_REFRESH_MS", "1500"))
 # Optional: alerts (dispatcher, managers) are POSTed here as JSON, e.g. a Slack or Teams incoming webhook.
 NOTIFY_WEBHOOK_URL = os.environ.get("NOTIFY_WEBHOOK_URL", "")
 

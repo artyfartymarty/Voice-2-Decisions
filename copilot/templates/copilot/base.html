@@ -37,10 +37,38 @@
   .error { color:var(--risk); }
   .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
   .stat { border:1px solid var(--line); border-radius:8px; padding:8px 10px; } .stat b { font-size:20px; display:block; }
+  header nav { margin-left:auto; } header nav a { font-weight:500; font-size:14px; color:var(--accent); }
+  main.wide { max-width:1280px; }
+  /* Call page: prompts beside the transcript on a wide screen, stacked on a narrow one. */
+  .call-grid { display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr); gap:16px; align-items:start; }
+  @media (max-width: 860px) { .call-grid { grid-template-columns:1fr; } }
+  .sticky { position:sticky; top:12px; }
+  .live-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--risk); margin-right:6px; animation:pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity:.3; } }
+  @media (prefers-reduced-motion: reduce) { .live-dot { animation:none; } }
+  .who dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; margin:0; } .who dt { color:var(--muted); font-size:13px; } .who dd { margin:0; }
+  .slot { border-radius:8px; padding:10px 12px; margin-bottom:16px; border:1px solid currentColor; font-weight:600; }
+  .slot-incomplete, .slot-waiting, .slot-unconfirmed { color:var(--question); } .slot-confirmed { color:var(--decision); font-weight:500; }
+  .group { margin-bottom:14px; } .group h3 { font-size:14px; margin:0 0 6px; display:flex; justify-content:space-between; gap:8px; }
+  .group h3 span { font-weight:400; color:var(--muted); font-size:12px; }
+  .pcard { border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:10px 12px; margin-bottom:8px; background:var(--card); }
+  .pcard.k-quote_request { border-left-color:var(--action_item); } .pcard.k-dispute_risk, .pcard.k-agent_prompt { border-left-color:var(--question); }
+  .pcard.k-sentiment_shift { border-left-color:var(--risk); } .pcard.k-tail_number { border-left-color:var(--decision); }
+  .pcard .head { font-weight:600; color:var(--text); } .pcard .say { margin-top:6px; padding:6px 8px; background:var(--bg); border-radius:4px; color:var(--text); }
+  .pcard table { font-size:13px; margin-top:6px; color:var(--text); } .pcard td, .pcard th { padding:3px 4px; vertical-align:top; } .pcard th { color:var(--muted); font-weight:500; width:100px; }
+  .pcard.new { animation:flash 2s ease-out; } @keyframes flash { from { background:var(--bg); } }
+  .empty { color:var(--muted); font-size:13px; padding:2px 0 6px; }
+  .transcript { max-height:70vh; overflow-y:auto; }
+  .turn { display:grid; grid-template-columns:72px 1fr; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); margin:0; }
+  .turn .who-label { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
+  .turn.r-agent .who-label { color:var(--action_item); } .turn.r-caller .who-label { color:var(--key_moment); }
+  .turn .t { font-size:12px; color:var(--muted); display:block; font-weight:400; text-transform:none; }
+  .pending { color:var(--muted); font-style:italic; padding-top:6px; }
+  details summary { cursor:pointer; color:var(--muted); }
 </style>
 </head>
 <body>
-<header><a href="{% url 'index' %}">Voice-2-Decisions</a><span>Nemotron ASR → winnow → tools</span></header>
-<main>{% block content %}{% endblock %}</main>
+<header><a href="{% url 'index' %}">Voice-2-Decisions</a><span>Nemotron ASR → winnow → tools</span><nav><a href="{% url 'manager_alerts' %}">Manager alerts</a></nav></header>
+<main{% block main_class %}{% endblock %}>{% block content %}{% endblock %}</main>
 </body>
 </html>

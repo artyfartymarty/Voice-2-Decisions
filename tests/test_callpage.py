@@ -1,0 +1,167 @@
+"""The call page a call handler watches during a live call: panels, prompt cards, slot hint, alerts view."""
+import json
+
+import pytest
+
+from copilot import callview
+from copilot.models import Call
+
+from .test_usecases import QUOTE_CALL
+
+pytestmark = pytest.mark.django_db
+
+
+def live_call(client, **body):
+    call = client.post("/api/calls/live/", json.dumps(body), content_type="application/json").json()
+    return call["id"], f"/api/calls/{call['id']}/partial/"
+
+
+def say(client, url, text, speaker="", final=False):
+    return client.post(url, json.dumps({"text": text, "speaker": speaker, "final": final}), content_type="application/json").json()
+
+
+def panels(client, pk, version=None):
+    return client.get(f"/calls/{pk}/panels/" + (f"?v={version}" if version else ""))
+
+
+def test_who_is_calling_before_and_after_customer_is_heard(client):
+    pk, url = live_call(client)
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert "Customer not identified yet." in page
+
+    say(client, url, "Hi, this is Dana with Northwind Aviation, account 204511. We're flying into Teterboro, K T E B.")
+    who = callview.who_is_calling(Call.objects.get(pk=pk))
+    assert who["customer_name"] == "NORTHWIND AVIATION, LLC" and who["customer_source"] == "heard on the call"
+    assert who["icao"] == "KTEB" and who["fbo"] == "Meadowlark Jet Center" and who["on_file_here"] is True
+    assert set(who["other_locations"]) == {"KVNY", "EGGW"}
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert "NORTHWIND AVIATION, LLC" in page and "Meadowlark Jet Center" in page
+
+
+def test_prefilled_customer_shows_phone_system_source(client):
+    pk, _ = live_call(client, customer_id="318842", ani="+12015550123")
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert "BLUE HERON JET CHARTER, INC" in page and "phone system" in page and "+12015550123" in page
+
+
+def test_slot_hint_follows_the_tail_number(client):
+    pk, url = live_call(client, customer_id="204511")
+    assert callview.slot_hint(Call.objects.get(pk=pk)) is None
+
+    say(client, url, "Tail number is bravo tango.", "caller")
+    hint = callview.slot_hint(Call.objects.get(pk=pk))
+    assert hint["state"] == "incomplete" and hint["value"] == "BT"
+    assert "Tail number incomplete" in hint["message"] and "N512BT" in hint["message"]
+    assert 'class="slot slot-incomplete"' in client.get(f"/calls/{pk}/").content.decode()
+
+    say(client, url, "Sorry, what was the tail number again?", "agent")
+    assert callview.slot_hint(Call.objects.get(pk=pk))["state"] == "waiting"
+
+    say(client, url, "November five one two bravo tango.", "caller")
+    hint = callview.slot_hint(Call.objects.get(pk=pk))
+    assert hint == {"state": "confirmed", "label": "Tail number", "value": "N512BT", "message": "Tail N512BT confirmed."}
+
+
+def test_prompt_cards_are_grouped_by_use_case(client):
+    pk, url = live_call(client)
+    groups = {g["title"]: g for g in callview.prompt_cards(Call.objects.get(pk=pk))}
+    assert list(groups) == ["GP", "Avoiding Disputes", "Customer Experience", "Confirm on the call"]
+    assert all(g["cards"] == [] for g in groups.values())
+    assert client.get(f"/calls/{pk}/").content.decode().count("Nothing yet.") == 4
+
+    say(client, url, QUOTE_CALL, "caller")
+    groups = {g["title"]: g for g in callview.prompt_cards(Call.objects.get(pk=pk))}
+    gp = groups["GP"]["cards"][0]
+    assert gp["headline"].startswith("Offer 0.0850 to 0.3125 GPPG")
+    assert gp["category"] == "GP" and gp["who"] == "Customer" and gp["sent_to"] == "Dispatcher"
+    assert "39,500 gal addressable" in gp["want_to_see"]
+    dispute = groups["Avoiding Disputes"]["cards"][0]
+    assert dispute["headline"].startswith("Dispute risk:") and "Fuel price excludes location fees" in dispute["say"]
+    cx = groups["Customer Experience"]["cards"][0]
+    assert cx["headline"].startswith("Heads up:") and cx["sent_to"] == "Call handler, managers / leads"
+
+
+def test_transcript_has_speaker_labels(client):
+    pk, url = live_call(client)
+    say(client, url, "Good morning, fuel desk, how can I help?", "speaker 1")
+    say(client, url, "Hi, this is Northwind Aviation, I need a fuel quote for Teterboro.", "speaker 2")
+    turns = callview.transcript(Call.objects.get(pk=pk))
+    assert [t["role"] for t in turns] == ["agent", "caller"]
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert 'class="turn r-agent"' in page and 'class="turn r-caller"' in page
+
+
+def test_pending_sentence_shows_under_the_transcript(client):
+    pk, url = live_call(client)
+    say(client, url, "We're flying into")
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert "Waiting for the end of the sentence" in page and 'title="We&#x27;re flying into"' in page
+
+
+def test_panels_endpoint_returns_html_and_skips_unchanged(client):
+    pk, url = live_call(client)
+    r = panels(client, pk)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "live" and set(data["panels"]) == {"who", "slot", "prompts", "transcript", "summary"}
+    assert data["panels"]["prompts"].startswith('<div class="card" id="panel-prompts">')
+    assert panels(client, pk, data["version"]).status_code == 204
+
+    say(client, url, "This is Northwind Aviation, quote for KTEB please.", "caller")
+    r = panels(client, pk, data["version"])
+    assert r.status_code == 200 and r.json()["version"] != data["version"]
+    assert "NORTHWIND AVIATION, LLC" in r.json()["panels"]["who"]
+
+
+def test_panels_for_missing_call_is_404(client):
+    assert panels(client, 999).status_code == 404
+
+
+def test_summary_appears_when_the_call_ends(client):
+    pk, url = live_call(client)
+    say(client, url, QUOTE_CALL, "caller")
+    assert "Call summary" not in panels(client, pk).json()["panels"]["summary"]
+    say(client, url, "", final=True)
+    data = panels(client, pk).json()
+    assert data["status"] == "done"
+    summary = data["panels"]["summary"]
+    assert "Call summary" in summary and "Use cases" in summary and "Dispatcher" in summary
+
+
+def test_live_page_has_the_refresh_script(client, settings):
+    pk, url = live_call(client)
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert f"/calls/{pk}/panels/" in page and "setInterval(refresh, 1500)" in page and "new WebSocket" in page
+    assert 'const ws = "";' in page  # no gateway configured: poll only
+
+    settings.GATEWAY_WS_URL = "wss://gateway.example/v1/events"
+    page = client.get(f"/calls/{pk}/").content.decode()
+    assert "wss://gateway.example/v1/events" in page
+
+    say(client, url, "", final=True)
+    assert "setInterval(refresh" not in client.get(f"/calls/{pk}/").content.decode()
+
+
+def test_manager_alerts_view(client):
+    done_pk, done_url = live_call(client, title="Finished call")
+    say(client, done_url, QUOTE_CALL, "caller", final=True)
+    live_pk, live_url = live_call(client, title="Angry caller")
+    say(client, live_url, "Honestly I'm frustrated, this is unacceptable. That was really disappointing.", "caller")
+
+    alerts = callview.manager_alerts()
+    assert {(a["call_id"], a["kind"]) for a in alerts} >= {(done_pk, "quote_request"), (done_pk, "sentiment_shift"),
+                                                           (live_pk, "sentiment_shift")}
+    page = client.get("/alerts/").content.decode()
+    assert "Manager alerts" in page and "Angry caller" in page and "Finished call" in page
+    assert f'href="/calls/{live_pk}/"' in page and "Sentiment turning negative" in page
+    assert "is asking for a quote at KTEB" in page  # the dispatcher alert text
+
+    live_only = client.get("/alerts/?live=1").content.decode()
+    assert "Angry caller" in live_only and "Finished call" not in live_only
+
+    fragment = client.get("/alerts/?partial=1").content.decode()
+    assert fragment.lstrip().startswith('<div id="panel-alerts">') and "<html" not in fragment
+
+
+def test_manager_alerts_empty(client):
+    assert "No alerts." in client.get("/alerts/").content.decode()

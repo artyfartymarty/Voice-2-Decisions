@@ -205,4 +205,5 @@ def test_live_quote_call_through_api(client):
     assert s["quotes"][0]["customer"] == "NORTHWIND AVIATION, LLC"
     assert Call.objects.get(pk=call["id"]).context["icao"] == "KTEB"
     page = client.get(f"/calls/{call['id']}/").content.decode()
-    assert "0.085–0.3125 GPPG" in page and "Dispute risk:" in page and "Use cases" in page and "Managers alerted" in page
+    assert "Offer 0.0850 to 0.3125 GPPG" in page and "Dispute risk:" in page and "Use cases" in page
+    assert "Heads up:" in page and "Call handler, managers / leads" in page

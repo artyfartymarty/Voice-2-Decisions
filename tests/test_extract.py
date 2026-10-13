@@ -196,7 +196,8 @@ def test_live_tail_reask_through_api(client):
     assert kinds[1] == []
     assert kinds[2][0][0] == "tail_number" and kinds[2][0][1]["on_file"] is True
     page = client.get(f"/calls/{call['id']}/").content.decode()
-    assert "Ask the caller:" in page and "Tail <b>N512BT</b>" in page
+    assert "Ask the caller to repeat the full tail number" in page and "Tail N512BT: On file" in page
+    assert "Tail N512BT confirmed." in page  # the slot hint once the tail is complete
 
 
 def test_boost_words(client):

@@ -84,7 +84,7 @@ def test_mono_recording_gets_roles_and_use_cases(client, scripted):
     assert s["sentiment_alerts"][0]["speaker"] == "caller"
     assert any(a["owner"] == "agent" and a["due"] == "end of day" for a in s["action_items"])
     page = client.get(f"/calls/{d['id']}/").content.decode()
-    assert "caller</b> (speaker 2)" in page
+    assert "speaker 1 = agent, speaker 2 = caller" in page and 'class="turn r-caller"' in page
 
 
 @pytest.mark.django_db

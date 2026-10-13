@@ -85,6 +85,12 @@ docker compose exec web python manage.py eval_speakers /path/call.wav   # needs 
 | GET | `/api/calls/<id>/summary/` | headline, counts, decisions, action items, risks, questions, quotes, dispute warnings, sentiment alerts, speaker roles |
 | POST | `/api/calls/live/` JSON `{"title"}` | start a live call |
 | POST | `/api/calls/<id>/partial/` multipart `audio` chunk (+ `final`), or JSON `{"text", "speaker", "final"}` | feed a live call; returns new moments and the current speaker roles |
+| GET | `/calls/<id>/` | the call page: who's calling, tail-number hint, prompt cards per use case, live transcript, summary when the call ends |
+| GET | `/calls/<id>/panels/` (`?v=<version>`) | the call page's panels as HTML for the live script; 204 when nothing changed |
+| GET | `/alerts/` (`?live=1`) | manager alert view: sentiment and quote alerts across calls, newest first |
+
+While a call is live the call page refreshes its panels every `LIVE_REFRESH_MS` (1.5 s). Set `GATEWAY_WS_URL` to a
+WebSocket that announces call updates and the page also refreshes on each message.
 
 CLI: `python manage.py process_call recording.wav [--full]` prints the summary as JSON.
 
