@@ -186,8 +186,24 @@ def test_flush_timer_runs_in_the_background(client, scripted, settings):
     call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
     chunk = np.concatenate([np.zeros(8000, dtype=np.float32), tone(1.0)])
     client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("a.wav", wav_bytes(chunk))})
-    for _ in range(30):
+    for _ in range(60):  # flush fires one chunk length (1.5 s) + LIVE_FLUSH_S after the chunk
         if Segment.objects.filter(call_id=call["id"]).exists():
             break
         time.sleep(0.1)
     assert Segment.objects.filter(call_id=call["id"]).values_list("text", flat=True)[0] == "Let's go with vendor B."
+
+
+@pytest.mark.django_db
+def test_flush_waits_for_the_stream_cadence(client, scripted, settings):
+    """A real-time stream of 2 s chunks must not be flushed before its next chunk is even due."""
+    import numpy as np
+    from copilot import pipeline
+    from tests.conftest import tone
+    settings.LIVE_FLUSH_S = 0.5
+    scripted(["We decided to go with the annual plan."])
+    call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
+    chunk = np.concatenate([np.zeros(16000, dtype=np.float32), tone(1.0)])  # 2 s chunk, speech to the end
+    client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("a.wav", wav_bytes(chunk))})
+    timer = pipeline._flush_timers[call["id"]]
+    assert timer.interval == pytest.approx(2.5)
+    pipeline.reset_live_state(call["id"])  # cancel it; the test is about the delay

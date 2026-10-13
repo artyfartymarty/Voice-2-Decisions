@@ -187,6 +187,7 @@ def _split_chunk_by_turns(chunk_start: float, chunk_end: float, turns, last_spea
 _carry: dict[int, tuple[float, np.ndarray]] = {}  # live call id -> (call time of carried audio, samples)
 _live_locks: dict[int, threading.Lock] = {}
 _flush_timers: dict[int, threading.Timer] = {}
+_chunk_s: dict[int, float] = {}  # live call id -> length of its last audio chunk (the stream's cadence)
 MAX_CARRY_S = 6.0
 
 
@@ -195,16 +196,18 @@ def _lock(call_id: int) -> threading.Lock:
 
 
 def _schedule_flush(call_id: int):
-    """If audio is still held back and no new chunk arrives within LIVE_FLUSH_S, transcribe it anyway.
+    """If audio is still held back and the next chunk is overdue, transcribe it anyway.
 
-    Without this, the last words before a quiet stretch (or the end of a stream that never sends final) would
-    only show up when the next chunk or the final request arrives.
+    "Overdue" means one chunk length (the stream's cadence: a real-time stream of 2 s chunks sends one every 2 s)
+    plus LIVE_FLUSH_S. Without this, the last words before a stall, or the end of a stream that never sends
+    final, would only show up when the next chunk or the final request arrives. Flushing on a shorter delay would
+    cut words that are simply still on their way in the next chunk.
     """
     old = _flush_timers.pop(call_id, None)
     if old:
         old.cancel()
     if call_id in _carry and settings.LIVE_FLUSH_S > 0:
-        t = threading.Timer(settings.LIVE_FLUSH_S, flush_live_audio, args=(call_id, True))
+        t = threading.Timer(_chunk_s.get(call_id, 0.0) + settings.LIVE_FLUSH_S, flush_live_audio, args=(call_id, True))
         t.daemon = True
         _flush_timers[call_id] = t
         t.start()
@@ -235,6 +238,7 @@ def reset_live_state(call_id: int):
     if timer:
         timer.cancel()
     _carry.pop(call_id, None)
+    _chunk_s.pop(call_id, None)
     close_live_session(call_id)
 
 
@@ -286,6 +290,8 @@ def _process_partial(call: Call, text: str, audio_bytes: bytes | None, final: bo
     chunk_start = call.duration
     if audio_bytes or (flush and call.pk in _carry):
         samples = audio.decode(audio_bytes) if audio_bytes else np.zeros(0, dtype=np.float32)
+        if len(samples):
+            _chunk_s[call.pk] = len(samples) / TARGET_SR
         chunk_end = chunk_start + len(samples) / TARGET_SR
         session = live_session(call.pk, create=bool(audio_bytes))
         turns = []

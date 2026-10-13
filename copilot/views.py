@@ -134,6 +134,8 @@ def healthz(request):
         if diarizer:
             diarizer.load()
     info["tools"] = tools.available()
+    from . import warmup
+    info["warmup"] = dict(warmup.state)
     diarizer_info = diarizer.info() if diarizer else {"backend": "off"}
     warnings = [f"{what} is the fake one: transcripts are canned text, not what was said"
                 for what, backend in (("the speech model", info), ("the diarizer", diarizer_info)) if backend.get("backend") == "fake"]

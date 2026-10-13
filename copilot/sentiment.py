@@ -85,10 +85,10 @@ def expected_value(answer: dict) -> tuple[float, dict]:
     """Expected index on the MOOD_SCALE from a /v1/systemone score answer.
 
     The API returns a probability map keyed by zero-based indices plus an expected value; field names are read
-    defensively (expected / expected_value / value), and computed from the probabilities if absent.
+    defensively (score / expected / expected_value / value), and computed from the probabilities if absent.
     """
     probs = next((v for v in answer.values() if isinstance(v, dict) and v and all(str(k).isdigit() for k in v)), {})
-    for key in ("expected", "expected_value", "value"):
+    for key in ("score", "expected", "expected_value", "value"):  # Winnow a50c7d0 returns it as "score"
         if isinstance(answer.get(key), (int, float)):
             return float(answer[key]), probs
     if probs:

@@ -143,8 +143,9 @@ def test_winnow_request_and_score_mapping(monkeypatch):
 
     def fake_urlopen(req, timeout):
         seen["url"], seen["body"] = req.full_url, json.loads(req.data)
+        # shape returned by winnow-server a50c7d0: the expected index is under "score"
         return FakeResponse(json.dumps({"answers": {"mood": {"type": "score", "probabilities": {"0": 0.0, "1": 0.1, "2": 0.2, "3": 0.7},
-                                                              "expected": 2.6, "confidence": 0.5}}}).encode())
+                                                              "score": 2.6, "confidence": 0.5}}}).encode())
 
     monkeypatch.setattr(sentiment.urllib.request, "urlopen", fake_urlopen)
     w = WinnowSentiment("http://127.0.0.1:8091", api_key="k")

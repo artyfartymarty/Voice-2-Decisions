@@ -80,7 +80,10 @@ ALLOW_FAKE_BACKEND = env_bool("ALLOW_FAKE_BACKEND", False)
 DIARIZER = os.environ.get("DIARIZER", {"nemotron": "nemotron", "nemo_speech": "nemotron", "demo": "demo"}.get(ASR_BACKEND, "off"))
 DIARIZER_MODEL_ID = os.environ.get("DIARIZER_MODEL_ID", "nvidia/Nemotron-3-Diarization")
 DIARIZER_STREAMING_MODE = os.environ.get("DIARIZER_STREAMING_MODE", "low_latency")  # or very_low_latency, ultra_low_latency
-# Live calls: audio held back mid-word is transcribed anyway after this many seconds without a new chunk (0 = off).
+# Load and exercise the models when the web server starts (wsgi), so the first live call doesn't wait for them.
+WARMUP_ON_START = env_bool("WARMUP_ON_START", True)
+# Live calls: audio held back mid-word is transcribed anyway once the next chunk is overdue by this many seconds
+# (that is, after one chunk length plus this, with no new chunk). 0 = off.
 LIVE_FLUSH_S = float(os.environ.get("LIVE_FLUSH_S", "0.9"))
 # Two-leg calls: "separate" transcribes each leg with a speaker label (default); "mix" folds them to one mono leg.
 LEG_MODE = os.environ.get("LEG_MODE", "separate")
