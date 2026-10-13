@@ -68,11 +68,13 @@ def test_call_file(request, name):
 
 def _call_page_context(call) -> dict:
     summary = pipeline.call_summary(call)
+    groups = callview.prompt_cards(call)
     return {
         "call": call, "summary": summary,
         "counts": [(kind, kind.replace("_", " "), n) for kind, n in summary["counts"].items()],
         "who": callview.who_is_calling(call), "slot": callview.slot_hint(call),
-        "groups": callview.prompt_cards(call), "turns": callview.transcript(call),
+        "groups": groups, "idle_groups": [g["title"] for g in groups if not g["cards"]],
+        "turns": callview.transcript(call), "headline": callview.headline(call) or summary["headline"],
         "version": callview.version(call),
     }
 

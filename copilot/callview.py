@@ -5,6 +5,7 @@ same data, and so it can be tested without a request.
 """
 import json
 import zlib
+from datetime import timedelta
 
 import soundfile as sf
 from django.conf import settings
@@ -60,8 +61,10 @@ def slot_hint(call: Call) -> dict | None:
     slot = (call.context or {}).get("tail") or {}
     value, partial = slot.get("value"), slot.get("partial")
     if slot.get("pending"):
-        return {"state": "waiting", "label": "Tail number",
-                "message": "Waiting for the caller to repeat the tail number." + (f" Heard so far: {partial}." if partial else "")}
+        message = (f"Waiting for the caller to repeat the tail number. Heard so far: {partial}." if partial else
+                   "Waiting for the caller to give the tail number again." if value else
+                   "Waiting for the caller to give the tail number.")
+        return {"state": "waiting", "label": "Tail number", "message": message}
     if partial:
         from .extract import registration_country
         state = "unconfirmed" if registration_country(partial) else "incomplete"
@@ -76,7 +79,14 @@ def slot_hint(call: Call) -> dict | None:
     return None
 
 
-def _card_for(m: Moment) -> dict:
+def _resolved(m: Moment, call: Call) -> bool:
+    """A tail-number prompt is resolved once a tail was confirmed after it."""
+    if m.kind != "agent_prompt" or m.tool_args.get("about") != "tail_number":
+        return False
+    return call.moments.filter(kind="tail_number", id__gt=m.pk).exists()
+
+
+def _card_for(m: Moment, resolved: bool = False) -> dict:
     """One prompt card. Use-case results carry a sheet card (Who / Want to see / Outcome / Category / Sent to)."""
     r = m.tool_result if isinstance(m.tool_result, dict) else {}
     sheet = r.get("card") or {}
@@ -103,23 +113,62 @@ def _card_for(m: Moment) -> dict:
         "who": sheet.get("who", ""), "want_to_see": sheet.get("want_to_see", ""), "outcome": sheet.get("outcome", ""),
         "category": sheet.get("category", ""), "sent_to": sheet.get("alerts", ""),
         "notified": bool(r.get("dispatcher_notified") or r.get("managers_notified")),
+        "resolved": resolved,
     }
 
 
 def prompt_cards(call: Call) -> list[dict]:
-    """Prompt cards grouped by use case, newest first in each group; groups with nothing yet are kept (empty)."""
+    """Prompt cards grouped by use case, newest first in each group; groups with nothing yet are kept (empty).
+
+    Groups with a card come first, the group with the newest card on top, so what just fired is at the top of the
+    column where the handler is looking.
+    """
     moments = list(call.moments.filter(kind__in=USE_CASE_KINDS).order_by("-id"))
     groups = []
     for title, kinds in CARD_GROUPS:
-        cards = [_card_for(m) for m in moments if m.kind in kinds]
-        groups.append({"title": title, "sent_to": ALERTS.get(title, "Call handler"), "cards": cards})
+        cards = [_card_for(m, _resolved(m, call)) for m in moments if m.kind in kinds]
+        cards.sort(key=lambda c: c["resolved"])  # open prompts above resolved ones, each newest first
+        groups.append({"title": title, "sent_to": ALERTS.get(title, "Call handler"), "cards": cards,
+                       "newest": max((c["id"] for c in cards), default=0)})
+    groups.sort(key=lambda g: -g["newest"])
     return groups
 
 
 def transcript(call: Call) -> list[dict]:
+    """Transcript turns: consecutive segments from the same speaker are one turn, so pauses don't split sentences."""
     roles = call.roles
-    return [{"id": s.pk, "start": s.start, "speaker": s.speaker, "role": roles.get(s.speaker, s.speaker) or "", "text": s.text}
-            for s in call.segments.all()]
+    turns = []
+    for s in call.segments.all():
+        if turns and turns[-1]["speaker"] == s.speaker:
+            turns[-1]["text"] = f"{turns[-1]['text']} {s.text}".strip()
+            turns[-1]["id"] = s.pk
+            continue
+        turns.append({"id": s.pk, "start": s.start, "speaker": s.speaker, "role": roles.get(s.speaker, s.speaker) or "",
+                      "text": s.text})
+    return turns
+
+
+def headline(call: Call) -> str:
+    """One line a handler can scan after the call: who, what they wanted, where, tail, and what fired.
+
+    Falls back to winnow's headline (first decision or action item) when no use case fired.
+    """
+    ctx = call.context or {}
+    kinds = set(call.moments.values_list("kind", flat=True))
+    parts = []
+    if ctx.get("customer_name"):
+        parts.append(ctx["customer_name"])
+    if ctx.get("quote_intent") or "quote_request" in kinds:
+        parts.append(f"quote wanted at {ctx['icao']}" if ctx.get("icao") else "quote wanted")
+    elif ctx.get("icao"):
+        parts.append(f"about {ctx['icao']}")
+    if ctx.get("tail_number"):
+        parts.append(f"tail {ctx['tail_number']}")
+    if "dispute_risk" in kinds:
+        parts.append("dispute risk: fees restated")
+    if "sentiment_shift" in kinds:
+        parts.append("caller upset, managers alerted")
+    return "; ".join(parts)
 
 
 def version(call: Call) -> str:
@@ -138,7 +187,7 @@ def manager_alerts(live_only: bool = False, limit: int = 100) -> list[dict]:
     out = []
     for m in qs[:limit]:
         card = _card_for(m)
-        card.update(call_id=m.call_id, call_title=str(m.call), call_status=m.call.status,
+        card.update(call_id=m.call_id, call_title=str(m.call), call_status=m.call.status, alerted_at=m.call.created_at + timedelta(seconds=m.start or 0),
                     customer=(m.call.context or {}).get("customer_name") or "",
                     avg_sentiment=(m.tool_result or {}).get("avg_sentiment") if isinstance(m.tool_result, dict) else None,
                     recent=(m.tool_result or {}).get("recent", []) if isinstance(m.tool_result, dict) else [],
@@ -161,5 +210,9 @@ def test_calls() -> list[dict]:
         truth = path.with_suffix(".truth.json")
         turns = len(json.loads(truth.read_text())) if truth.exists() else 0
         out.append({"name": path.name, "path": str(path), "duration": round(info.duration, 1),
-                    "channels": info.channels, "labeled_turns": turns})
+                    "channels": info.channels, "labeled_turns": turns,
+                    "scripted": path.with_suffix(".script.json").exists(),
+                    "single_leg": path.stem.endswith(("_agent", "_caller"))})
+    # Whole calls first (scripted demo calls on top), single legs of a two-leg call last.
+    out.sort(key=lambda c: (c["single_leg"], not c["scripted"], c["name"]))
     return out

@@ -1,4 +1,15 @@
 <script>
+// Hold each call column to the part of the window below it, so its newest card or line is never below the fold.
+window.v2dFitColumns = function () {
+  if (matchMedia('(max-width: 860px)').matches) return;
+  document.querySelectorAll('.call-col').forEach(col => {
+    const top = Math.max(12, col.getBoundingClientRect().top);
+    col.style.maxHeight = `${Math.max(240, innerHeight - top - 12)}px`;
+  });
+};
+addEventListener('scroll', () => v2dFitColumns(), { passive: true });
+addEventListener('resize', () => v2dFitColumns());
+addEventListener('DOMContentLoaded', () => v2dFitColumns());
 // Live call panels: swap the server-rendered panels (/calls/<id>/panels/) in place. Polls every refreshMs and also
 // refreshes on each message from the gateway WebSocket when one is configured. A 204 means nothing changed.
 window.v2dLive = function (url, version, opts = {}) {
@@ -23,6 +34,7 @@ window.v2dLive = function (url, version, opts = {}) {
       document.querySelectorAll('.pcard[data-id]').forEach(el => {
         if (!seen.has(el.dataset.id)) { el.classList.add('new'); seen.add(el.dataset.id); }
       });
+      v2dFitColumns();
       const nbox = document.querySelector('[data-scroll]');
       if (nbox && atBottom) nbox.scrollTop = nbox.scrollHeight;
       onUpdate(data);
@@ -34,6 +46,7 @@ window.v2dLive = function (url, version, opts = {}) {
   if (opts.wsUrl) {
     try { new WebSocket(opts.wsUrl).onmessage = ev => { if (timer) refresh(); }; } catch (e) {}
   }
+  v2dFitColumns();
   const box = document.querySelector('[data-scroll]');
   if (box) box.scrollTop = box.scrollHeight;
   timer = setInterval(refresh, refreshMs);

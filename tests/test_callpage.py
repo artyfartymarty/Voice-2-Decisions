@@ -68,7 +68,7 @@ def test_prompt_cards_are_grouped_by_use_case(client):
     groups = {g["title"]: g for g in callview.prompt_cards(Call.objects.get(pk=pk))}
     assert list(groups) == ["GP", "Avoiding Disputes", "Customer Experience", "Confirm on the call"]
     assert all(g["cards"] == [] for g in groups.values())
-    assert client.get(f"/calls/{pk}/").content.decode().count("Nothing yet.") == 4
+    assert "Nothing yet from: GP, Avoiding Disputes, Customer Experience, Confirm on the call." in client.get(f"/calls/{pk}/").content.decode()
 
     say(client, url, QUOTE_CALL, "caller")
     groups = {g["title"]: g for g in callview.prompt_cards(Call.objects.get(pk=pk))}
@@ -226,3 +226,76 @@ def test_pages_warn_when_the_speech_model_is_fake(client):
     pk, _ = live_call(client)
     for url in ("/", f"/calls/{pk}/"):
         assert "The speech model is off (ASR_BACKEND=fake)" in client.get(url).content.decode()
+
+
+# --- fixes from the scripted demo run ---
+
+def test_consecutive_lines_from_one_speaker_are_one_turn(client):
+    pk, url = live_call(client)
+    for spk, text in [("speaker 2", "Yeah, this"), ("speaker 2", "is Dana at Northwind"), ("speaker 2", "Aviation, account 204511."),
+                      ("speaker 1", "Thanks Dana, how can I help?"), ("speaker 2", "I need a fuel quote.")]:
+        say(client, url, text, spk)
+    turns = callview.transcript(Call.objects.get(pk=pk))
+    assert [t["text"] for t in turns] == ["Yeah, this is Dana at Northwind Aviation, account 204511.",
+                                          "Thanks Dana, how can I help?", "I need a fuel quote."]
+    assert turns[0]["start"] == 0.0 and turns[0]["id"] < turns[1]["id"]
+
+
+def test_first_tail_ask_does_not_say_repeat():
+    call = Call(context={"tail": {"value": None, "partial": "", "pending": True}})
+    assert callview.slot_hint(call)["message"] == "Waiting for the caller to give the tail number."
+    call.context["tail"]["partial"] = "BT"
+    assert "repeat" in callview.slot_hint(call)["message"]
+
+
+def test_tail_prompt_is_resolved_once_the_tail_is_confirmed(client):
+    pk, url = live_call(client, customer_id="204511")
+    say(client, url, "Tail number is bravo tango.", "caller")
+    confirm = next(g for g in callview.prompt_cards(Call.objects.get(pk=pk)) if g["title"] == "Confirm on the call")
+    assert [c["resolved"] for c in confirm["cards"]] == [False]
+    say(client, url, "Sorry, what was the tail number again?", "agent")
+    say(client, url, "November five one two bravo tango.", "caller")
+    groups = callview.prompt_cards(Call.objects.get(pk=pk))
+    assert groups[0]["title"] == "Confirm on the call"  # the group with the newest card is on top
+    assert [(c["kind"], c["resolved"]) for c in groups[0]["cards"]] == [("tail_number", False), ("agent_prompt", True)]
+    assert 'class="pcard k-agent_prompt resolved"' in client.get(f"/calls/{pk}/").content.decode()
+
+
+def test_summary_headline_says_what_the_call_was_about(client):
+    pk, url = live_call(client)
+    say(client, url, QUOTE_CALL, "caller", final=True)
+    line = callview.headline(Call.objects.get(pk=pk))
+    assert line == "NORTHWIND AVIATION, LLC; quote wanted at KTEB; dispute risk: fees restated; caller upset, managers alerted"
+    assert f"<b>{line}</b>" in panels(client, pk).json()["panels"]["summary"]
+
+
+def test_headline_falls_back_without_use_cases(client, wav):
+    from copilot import pipeline
+    call = Call.objects.create()
+    pipeline.process_recording(call, [wav])
+    assert callview.headline(call) == ""
+    assert "<b>We decided to go with the annual plan.</b>" in client.get(f"/calls/{call.pk}/").content.decode()
+
+
+def test_header_shows_the_speech_backend(client, settings):
+    settings.ASR_BACKEND = "demo"
+    assert 'class="mode mode-demo"' in client.get("/alerts/").content.decode()
+
+
+def test_test_calls_put_whole_calls_first(settings, tmp_path):
+    from .conftest import tone, wav_bytes
+    for name in ("a_agent.wav", "b.wav", "c.wav"):
+        (tmp_path / name).write_bytes(wav_bytes(tone(1.0)))
+    (tmp_path / "c.script.json").write_text("[]")
+    settings.TEST_CALLS_DIR = tmp_path
+    calls = callview.test_calls()
+    assert [(c["name"], c["scripted"], c["single_leg"]) for c in calls] == [
+        ("c.wav", True, False), ("b.wav", False, False), ("a_agent.wav", False, True)]
+
+
+def test_alerts_have_a_time(client):
+    pk, url = live_call(client, title="Angry caller")
+    say(client, url, "Honestly I'm frustrated, this is unacceptable. That was really disappointing.", "caller")
+    alert = callview.manager_alerts()[0]
+    assert alert["alerted_at"] >= Call.objects.get(pk=pk).created_at
+    assert "<time datetime=" in client.get("/alerts/").content.decode()

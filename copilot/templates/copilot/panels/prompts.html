@@ -1,10 +1,10 @@
 <div class="card" id="panel-prompts">
   <h2>Prompts</h2>
-  {% for g in groups %}
+  {% for g in groups %}{% if g.cards %}
   <div class="group">
     <h3>{{ g.title }} <span>Sent to: {{ g.sent_to }}</span></h3>
     {% for c in g.cards %}
-    <div class="pcard k-{{ c.kind }}" data-id="{{ c.id }}">
+    <div class="pcard k-{{ c.kind }}{% if c.resolved %} resolved{% endif %}" data-id="{{ c.id }}">
       <div class="head">{{ c.headline }}</div>
       {% if c.say %}<div class="say">Add to the quote: “{{ c.say }}”</div>{% endif %}
       {% if c.category %}
@@ -18,7 +18,8 @@
       {% endif %}
       <div class="muted">{% if c.at is not None %}{{ c.at|floatformat:1 }} s · {% endif %}{% if c.role %}{{ c.role }}: {% endif %}“{{ c.heard }}”{% if c.status != "done" %} · tool {{ c.status }}{% endif %}</div>
     </div>
-    {% empty %}<div class="empty">Nothing yet.</div>{% endfor %}
+    {% endfor %}
   </div>
-  {% endfor %}
+  {% endif %}{% endfor %}
+  {% if idle_groups %}<p class="waiting-for">Nothing yet from: {{ idle_groups|join:", " }}.</p>{% endif %}
 </div>

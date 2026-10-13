@@ -79,7 +79,7 @@ def test_dispute_from_the_customer_side():
     d = next(m for m in out if m.kind == "dispute_risk")
     r = tools.dispatch(d.tool_call)["result"]
     assert r["location_disputes"] == 0 and r["customer_disputes"] == 5 and r["customer_rank"] == 1
-    assert "this customer has 5 (#1 of" in r["prompt_agent"]
+    assert "no disputes at KVNY, but this customer has 5 elsewhere (#1 of" in r["prompt_agent"]
     assert r["card"]["pattern"] == "Single key word, static data search"
 
 

@@ -150,7 +150,8 @@ def dispute_guidance(text, icao, customer_number=None, keyword="", at=None):
         who.append(f"{icao} has {profile['location_disputes']} disputes"
                    + (f" (#{profile['location_rank']} of {profile['locations_ranked']} locations)" if profile["location_rank"] else ""))
     if profile["customer_disputes"]:
-        who.append(f"this customer has {profile['customer_disputes']}"
+        who.append(f"{'this customer has' if who else f'no disputes at {icao}, but this customer has'} "
+                   f"{profile['customer_disputes']}{'' if who else ' elsewhere'}"
                    + (f" (#{profile['customer_rank']} of {profile['customers_ranked']} customers)" if profile["customer_rank"] else ""))
     reason = f" Last issue here: {profile['top_reason']}." if profile["top_reason"] else ""
     prompt = f"Dispute risk: {', '.join(who)}.{reason} Restate the fees before closing: {fee_list}."

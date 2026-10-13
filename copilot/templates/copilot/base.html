@@ -40,9 +40,8 @@
   header nav { margin-left:auto; } header nav a { font-weight:500; font-size:14px; color:var(--accent); }
   main.wide { max-width:1280px; }
   /* Call page: prompts beside the transcript on a wide screen, stacked on a narrow one. */
-  .call-grid { display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr); gap:16px; align-items:start; }
+  .call-grid { display:grid; grid-template-columns:minmax(0, 5fr) minmax(0, 6fr); gap:16px; align-items:start; margin-bottom:16px; }
   @media (max-width: 860px) { .call-grid { grid-template-columns:1fr; } }
-  .sticky { position:sticky; top:12px; }
   .live-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--risk); margin-right:6px; animation:pulse 1.4s infinite; }
   @keyframes pulse { 50% { opacity:.3; } }
   @media (prefers-reduced-motion: reduce) { .live-dot { animation:none; } }
@@ -58,7 +57,7 @@
   .pcard table { font-size:13px; margin-top:6px; color:var(--text); } .pcard td, .pcard th { padding:3px 4px; vertical-align:top; } .pcard th { color:var(--muted); font-weight:500; width:100px; }
   .pcard.new { animation:flash 2s ease-out; } @keyframes flash { from { background:var(--bg); } }
   .empty { color:var(--muted); font-size:13px; padding:2px 0 6px; }
-  .transcript { max-height:70vh; overflow-y:auto; }
+  .transcript { max-height:60vh; overflow-y:auto; }
   .turn { display:grid; grid-template-columns:72px 1fr; gap:8px; padding:6px 0; border-bottom:1px solid var(--line); margin:0; }
   .turn .who-label { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; }
   .turn.r-agent .who-label { color:var(--action_item); } .turn.r-caller .who-label { color:var(--key_moment); }
@@ -76,11 +75,31 @@
   label.inline { display:inline-flex; gap:4px; align-items:center; margin:0; color:var(--text); font-size:14px; }
   select { padding:4px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
   progress { width:100%; margin-top:10px; accent-color:var(--accent); }
+  .mode { font-size:12px; font-weight:600; padding:1px 8px; border-radius:99px; border:1px solid currentColor; color:var(--muted); }
+  .mode-demo, .mode-fake { color:var(--question); }
+  /* Call grid: each column is held to the window, so the newest prompt and transcript line stay on screen. */
+  .call-col { position:sticky; top:12px; max-height:calc(100vh - 24px); overflow-y:auto; display:flex; flex-direction:column; }
+  .call-col > * { flex:none; }
+  .call-col .grow { flex:1 1 auto; min-height:220px; display:flex; flex-direction:column; }
+  .call-col .grow .transcript { flex:1 1 auto; max-height:none; min-height:0; }
+  @media (max-width: 860px) { .call-col { position:static; max-height:none; overflow:visible; } .call-col .grow .transcript { max-height:60vh; } }
+  .pcard.resolved { opacity:.55; border-left-color:var(--line); } .pcard.resolved .head::before { content:"Done: "; color:var(--decision); }
+  .waiting-for { color:var(--muted); font-size:13px; margin:4px 0 0; }
+  .who.compact { padding:12px 16px; } .who.compact h2 { margin-bottom:6px; }
+  .stack-table th, .stack-table td { vertical-align:top; }
+  @media (max-width: 640px) {
+    .stack-table tr:first-child { display:none; }
+    .stack-table tr, .stack-table td { display:block; border:0; padding:2px 0; }
+    .stack-table tr { border-bottom:1px solid var(--line); padding:8px 0; }
+    .stack-table td[data-label]::before { content:attr(data-label) ": "; color:var(--muted); font-size:12px; }
+  }
+  .picked .sim-grid, .picked .intro { display:none; } .picked h1 { font-size:16px; margin-bottom:0; }
+  .picked .player { margin-top:8px; padding-top:0; border-top:0; }
   details summary { cursor:pointer; color:var(--muted); }
 </style>
 </head>
 <body>
-<header><a href="{% url 'index' %}">Voice-2-Decisions</a><span>Nemotron ASR → winnow → tools</span><nav><a href="{% url 'manager_alerts' %}">Manager alerts</a></nav></header>
+<header><a href="{% url 'index' %}">Voice-2-Decisions</a><span class="mode mode-{{ asr_backend }}" title="Speech backend (ASR_BACKEND)">speech: {{ asr_backend }}</span><nav><a href="{% url 'manager_alerts' %}">Manager alerts</a></nav></header>
 <main{% block main_class %}{% endblock %}>{% block content %}{% endblock %}</main>
 </body>
 </html>

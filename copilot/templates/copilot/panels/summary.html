@@ -2,16 +2,16 @@
 {% if call.status != "live" %}
 <div class="card">
   <h2>Call summary</h2>
-  <p><b>{{ summary.headline }}</b></p>
+  <p><b>{{ headline }}</b></p>
   <div class="grid">
     {% for kind, label, n in counts %}{% if n %}<div class="stat k-{{ kind }}"><b>{{ n }}</b>{{ label }}</div>{% endif %}{% endfor %}
   </div>
   {% if summary.use_cases %}
   <h3 style="font-size:14px;margin:14px 0 6px">Use cases</h3>
-  <table>
+  <table class="stack-table">
     <tr><th>Who</th><th>Want to see</th><th>Outcome</th><th>Category</th><th>Sent to</th></tr>
     {% for c in summary.use_cases %}
-    <tr><td>{{ c.who }}</td><td>{{ c.want_to_see }}</td><td>{{ c.outcome }}</td><td><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td><td>{{ c.alerts }}</td></tr>
+    <tr><td data-label="Who">{{ c.who }}</td><td data-label="Want to see">{{ c.want_to_see }}</td><td data-label="Outcome">{{ c.outcome }}</td><td data-label="Category"><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td><td data-label="Sent to">{{ c.alerts }}</td></tr>
     {% endfor %}
   </table>
   {% endif %}
