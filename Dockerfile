@@ -6,6 +6,8 @@ WORKDIR /app
 COPY decisions decisions
 COPY reference reference
 COPY demos demos
+# Only for the tests: the Winnow guard is a stdlib file, so its test runs here too (it runs in the Winnow image).
+COPY winnow/guard.py winnow/guard.py
 
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
