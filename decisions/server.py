@@ -10,7 +10,7 @@
 
 Settings (environment): REFERENCE_DIR, WINNOW_URL, WINNOW_API_KEY, DECIDER=auto|rules, DECIDE_MIN_P, ROLE_MAP,
 EXTRACT_MODE, EXTRACT_MODEL_URL, EXTRACT_MODEL, EXTRACT_MODEL_API_KEY, EXTRACT_MODEL_REASONING, EXTRACT_MODEL_TIMEOUT,
-DECISION_WEBHOOK_URL (each new decision is POSTed there as JSON).
+DECISION_WEBHOOK_URL (each new decision is POSTed there as JSON), CORS_ORIGIN (default *). The contract is in API.md.
 """
 import json
 import logging
@@ -39,6 +39,7 @@ class App:
         self.model = model_from_env(env)
         self.mode = env.get("EXTRACT_MODE", "model")
         self.webhook = env.get("DECISION_WEBHOOK_URL", "")
+        self.cors = env.get("CORS_ORIGIN", "*")  # empty = no CORS headers
         self.calls: dict[str, tuple[Call, EventReader, threading.Lock]] = {}
         self.lock = threading.Lock()
 
@@ -74,8 +75,20 @@ def make_handler(app: App):
             self.send_response(status)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
+            self._cors()
             self.end_headers()
             self.wfile.write(data)
+
+        def _cors(self):  # the UI may call this from a browser on another origin
+            if app.cors:
+                self.send_header("Access-Control-Allow-Origin", app.cors)
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+        def do_OPTIONS(self):
+            self.send_response(204)
+            self._cors()
+            self.end_headers()
 
         def _call_id(self):
             parts = self.path.split("?")[0].strip("/").split("/")

@@ -96,6 +96,8 @@ fine-tune by EldanRing), so copying or re-hosting it with the license is allowed
 
 ## Send it text
 
+The full request and response contract, for wiring up the UI, is in [API.md](API.md). In short:
+
 `POST /calls/<call-id>/events` with one event or a list. Any of these shapes works:
 
 ```jsonc
