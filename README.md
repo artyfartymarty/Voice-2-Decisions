@@ -196,6 +196,13 @@ the API while Winnow is loading or if it stops answering.
   caller; "none" (or a pick below `DECIDE_MIN_P`) asks for the account number instead. A tail that isn't on the
   customer's fleet works the same way, with the fleet's tails one or two characters off ("N47JA": N47AJ, N74AJ).
   Winnow gets only text: Nova Sonic's transcript, never the audio.
+- **A slip that lands on another real customer** ("Arrow" written when the caller said "Aero", and both are customers)
+  can't be seen in the text, so names that sound or look alike are grouped up front from `customers.csv`. An exact
+  match on a name in a group still counts as ambiguous. The tail and airport already heard narrow the group (only Aero
+  Vista fuels at KVNY); if more than one is left, Winnow chooses with each option's airports and tails in view. The
+  agent always reads an ambiguous account back, with "if the caller doesn't confirm, ask for the account number". A
+  tail or airport heard later that fits exactly one other customer in the group switches the account, re-runs the
+  lookups and tells the agent to confirm it.
 
 | File | What it does |
 |---|---|
