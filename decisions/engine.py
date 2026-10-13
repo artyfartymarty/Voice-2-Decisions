@@ -16,6 +16,7 @@ only values that exist in the reference data, or a valid registration, can fill 
 """
 import re
 import time
+from difflib import SequenceMatcher
 
 from copilot import extract, slots
 
@@ -39,6 +40,7 @@ class Call:
         self.decision: dict | None = None
         self.prompts: list[str] = []
         self.started = time.time()
+        self._unsure: dict[str, dict] = {}  # this line's fuzzy matches, for Winnow to settle: var -> {heard, options}
 
     # --- variables ---
     def _set(self, name, value, label="", confidence=1.0, heard="", speaker=""):
@@ -57,9 +59,14 @@ class Call:
                 changed.append(name)
                 if name and e.confidence < 0.95:  # matched on a heard name, not the account number: read it back
                     prompts.append(f"Confirm the account: heard \"{e.evidence}\", matched {e.label} ({e.value}).")
+                    self._unsure["customer_number"] = self._candidates(e, [(n, c, name_) for n, (name_, c) in self.extractor.customers.items()])
             if "location" in found:
                 e = found["location"]
-                changed.append(self._set("icao", e.value, e.label, e.confidence, e.evidence, speaker))
+                if self._set("icao", e.value, e.label, e.confidence, e.evidence, speaker):
+                    changed.append("icao")
+                    if e.confidence < 0.95:
+                        places = [(icao, alias, self.extractor.ref.locations[icao].fbo) for icao, alias in self.extractor.place_names]
+                        self._unsure["icao"] = self._candidates(e, places)
             customer = self.variables.get("customer_number", {}).get("value")
             for ev in slots.update(self.tail_slot, sentence, speaker, self.extractor, customer):
                 if ev["type"] == "validate":
@@ -67,6 +74,28 @@ class Call:
                 else:
                     prompts.append(ev["message"])
         return [c for c in changed if c], prompts
+
+    @staticmethod
+    def _candidates(match, names: list[tuple[str, str, str]], top: int = 4) -> dict:
+        """The fuzzy match plus the next-closest names to what was heard: the options Winnow chooses between."""
+        best: dict[str, tuple[float, str]] = {match.value: (2.0, match.label)}
+        for value, name, label in names:
+            score = SequenceMatcher(None, extract.squash(match.evidence), extract.squash(name)).ratio()
+            if score > best.get(value, (0.0, ""))[0]:
+                best[value] = (score, label)
+        ranked = sorted(best.items(), key=lambda kv: -kv[1][0])[:top]
+        return {"heard": match.evidence, "options": {value: label for value, (score, label) in ranked if score >= 0.3}}
+
+    def _settle(self, picks: dict, speaker: str) -> list[str]:
+        """Apply Winnow's answers to this line's unsure matches (a pick of "none" keeps the fuzzy match)."""
+        changed = []
+        for var, pick in (picks or {}).items():
+            unsure = self._unsure.get(var)
+            if unsure and pick["value"] in unsure["options"] and pick["p"] >= self.min_p:
+                if self._set(var, pick["value"], unsure["options"][pick["value"]], pick["p"], unsure["heard"], speaker):
+                    changed.append(var)
+                self.variables[var]["settled_by"] = "winnow"
+        return changed
 
     # --- functions ---
     def _args(self, fn) -> dict | None:
@@ -115,13 +144,19 @@ class Call:
         self.preview = ""
         line = {"speaker": speaker, "text": text.strip(), "at": round(time.time() - self.started, 2)}
         self.transcript.append(line)
+        self._unsure = {}
         changed, prompts = self._extract(speaker, line["text"])
         self.prompts += prompts
         fired = self._autocall()
         decision = None
         if speaker in self.decide_on:
-            picked = self.decider.decide(line["text"], self.transcript, self.variables)
-            picked = {k: picked[k] for k in ("p", "by", "probabilities") if k in picked} | {"function": picked["function"]}
+            # One model request: what the caller wants, plus which customer / location they meant if the match was fuzzy.
+            picked = self.decider.decide(line["text"], self.transcript, self.variables, self._unsure)
+            settled = self._settle(picked.get("variables"), speaker)
+            if settled:
+                changed += [v for v in settled if v not in changed]
+                fired += self._autocall()
+            picked = {k: picked[k] for k in ("p", "by", "probabilities", "ms") if k in picked} | {"function": picked["function"]}
             if picked["function"] and picked["p"] >= self.min_p:
                 decision = self._surface(picked.pop("function"), picked, line["text"])
         if decision is None and self.waiting_for and not self.missing(self.waiting_for):

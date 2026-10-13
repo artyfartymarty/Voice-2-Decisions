@@ -28,10 +28,13 @@ RULES = [  # first match wins, so the more specific asks come first
 ]
 
 
+UNSURE_WHAT = {"customer_number": "customer", "icao": "airport or FBO"}
+
+
 class RuleDecider:
     name = "rules"
 
-    def decide(self, latest: str, recent: list[dict], variables: dict) -> dict:
+    def decide(self, latest: str, recent: list[dict], variables: dict, unsure: dict | None = None) -> dict:
         for fn, pattern in RULES:
             if pattern.search(latest):
                 return {"function": fn, "p": 1.0, "by": self.name}
@@ -47,7 +50,7 @@ class WinnowDecider:
         self.fallback = RuleDecider()
         self._down_until = 0.0
 
-    def request_body(self, latest: str, recent: list[dict], variables: dict) -> dict:
+    def request_body(self, latest: str, recent: list[dict], variables: dict, unsure: dict | None = None) -> dict:
         criteria = {f.name: f.description for f in FUNCTIONS}
         criteria["none"] = NONE_DESCRIPTION
         return {
@@ -65,20 +68,29 @@ class WinnowDecider:
                                     "right now? Pick the lookup whose result the agent should give them.",
                     "criteria": criteria,
                 },
+                # Tie-breakers for fuzzy matches on this line; they share the state, so they cost a few tokens each.
+                **{f"which_{var}": {
+                    "type": "choice",
+                    "instructions": f"The caller's speech was transcribed as \"{u['heard']}\". Which "
+                                    f"{UNSURE_WHAT.get(var, var)} did they mean?",
+                    "criteria": {**u["options"], "none": "none of these"},
+                } for var, u in (unsure or {}).items() if u.get("options")},
             },
         }
 
-    def decide(self, latest: str, recent: list[dict], variables: dict) -> dict:
+    def decide(self, latest: str, recent: list[dict], variables: dict, unsure: dict | None = None) -> dict:
         if time.monotonic() < self._down_until:
             return {**self.fallback.decide(latest, recent, variables), "by": "rules (winnow unavailable)"}
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        body = json.dumps(self.request_body(latest, recent, variables)).encode()
+        body = json.dumps(self.request_body(latest, recent, variables, unsure)).encode()
+        t0 = time.perf_counter()
         try:
             req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                answer = json.loads(resp.read())["answers"]["answer_with"]
+                answers = json.loads(resp.read())["answers"]
+            answer = answers["answer_with"]
             probs = {k: float(v) for k, v in (answer.get("probabilities") or answer.get("probs") or {}).items()}
             pick = answer.get("choice") or answer.get("selected") or answer.get("answer") or (max(probs, key=probs.get) if probs else None)
             if pick is None:
@@ -87,8 +99,13 @@ class WinnowDecider:
             log.warning("winnow decision unavailable (%s); using keyword rules for 30 s", exc)
             self._down_until = time.monotonic() + 30
             return {**self.fallback.decide(latest, recent, variables), "by": "rules (winnow unavailable)"}
+        settled = {}
+        for key, a in answers.items():
+            if key.startswith("which_") and a.get("choice") not in (None, "none"):
+                settled[key[len("which_"):]] = {"value": a["choice"], "p": round(float((a.get("probabilities") or {}).get(a["choice"], 0)), 3)}
         return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, answer.get("confidence", 0.0)), 3),
-                "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name}
+                "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name, "variables": settled,
+                "ms": round((time.perf_counter() - t0) * 1000)}
 
 
 def from_env(env) -> RuleDecider | WinnowDecider:

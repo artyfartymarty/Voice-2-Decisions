@@ -94,6 +94,7 @@ class Engine(unittest.TestCase):
 
 class FakeWinnow(BaseHTTPRequestHandler):
     pick = "fuel_quote"
+    which = {}  # "which_customer_number" -> the option to pick (default: the first, i.e. the fuzzy match)
     seen = []
 
     def do_POST(self):
@@ -101,8 +102,12 @@ class FakeWinnow(BaseHTTPRequestHandler):
         FakeWinnow.seen.append(body)
         keys = list(body["questions"]["answer_with"]["criteria"])
         probs = {k: (0.8 if k == self.pick else 0.2 / (len(keys) - 1)) for k in keys}
-        out = json.dumps({"answers": {"answer_with": {"type": "choice", "choice": self.pick, "probabilities": probs,
-                                                      "confidence": 0.6}}}).encode()
+        answers = {"answer_with": {"type": "choice", "choice": self.pick, "probabilities": probs, "confidence": 0.6}}
+        for qid, q in body["questions"].items():
+            if qid.startswith("which_"):
+                pick = self.which.get(qid, next(iter(q["criteria"])))
+                answers[qid] = {"type": "choice", "choice": pick, "probabilities": {k: 0.9 if k == pick else 0.02 for k in q["criteria"]}}
+        out = json.dumps({"answers": answers}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(out)))
         self.end_headers()
@@ -144,6 +149,25 @@ class Winnow(unittest.TestCase):
             FakeWinnow.pick = "fuel_quote"
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), min_p=0.9)
         self.assertIsNone(call.feed("caller", "Northwind at Van Nuys, price?")["decision"])
+
+    def test_fuzzy_name_is_settled_in_the_same_request(self):
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url))
+        call.feed("caller", "This is Priya at Blue Herring Jet Charter, quote at Le Bourget please.")
+        q = FakeWinnow.seen[-1]["questions"]
+        self.assertEqual(len(FakeWinnow.seen[-1]["questions"]), 2)  # intent + which customer, one request
+        self.assertIn("318842", q["which_customer_number"]["criteria"])
+        self.assertIn("none", q["which_customer_number"]["criteria"])
+        self.assertEqual(call.variables["customer_number"]["settled_by"], "winnow")
+
+    def test_winnow_overrides_a_wrong_fuzzy_match_and_functions_rerun(self):
+        FakeWinnow.which = {"which_customer_number": "377205"}
+        try:
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url))
+            out = call.feed("caller", "This is Priya at Blue Herring Jet Charter, quote at Le Bourget please.")
+        finally:
+            FakeWinnow.which = {}
+        self.assertEqual(call.variables["customer_number"]["value"], "377205")
+        self.assertEqual(out["decision"]["result"]["customer_number"], "377205")
 
     def test_unreachable_winnow_falls_back_to_rules(self):
         call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))

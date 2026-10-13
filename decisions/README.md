@@ -153,6 +153,10 @@ the API while Winnow is loading or if it stops answering.
   `airport_aliases.csv`) in `decisions/reference`, uncomment the volume in `docker-compose.yml`, set
   `REFERENCE_DIR=/reference`.
 - **How sure Winnow must be:** `DECIDE_MIN_P` (default 0.5).
+- **Fuzzy names:** customer and location are matched against the reference lists first. When a match came from a heard
+  name rather than an exact code or account number, the same Winnow request also asks "which customer / airport did
+  they mean?" over the closest few names plus "none of these", and its pick settles the variable (functions re-run if
+  it changed). The agent is also prompted to read the name back. Each decision prints its round-trip time (`ms`).
 
 | File | What it does |
 |---|---|

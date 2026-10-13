@@ -60,7 +60,7 @@ def main():
                 print(f"         prompt    {prompt}")
             if step["decision"]:
                 d = step["decision"]
-                print(f"      >> DECISION  {d['function']} [{d['by']}{', p=' + str(d['p']) if 'p' in d else ''}]: {d['say']}")
+                print(f"      >> DECISION  {d['function']} [{d['by']}{', p=' + str(d['p']) if 'p' in d else ''}{', ' + str(d['ms']) + ' ms' if 'ms' in d else ''}]: {d['say']}")
 
 
 if __name__ == "__main__":
