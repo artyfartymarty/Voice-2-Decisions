@@ -1,0 +1,158 @@
+"""Tests for the text-to-decisions service. Standard library only, no GPU or model:
+
+    python -m unittest decisions.test_decisions -v
+    docker compose run --rm api python -m unittest decisions.test_decisions
+"""
+import json
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+from .decider import RuleDecider, WinnowDecider
+from .engine import Call, load_extractor
+from .events import EventReader
+from .server import App
+
+ROOT = Path(__file__).resolve().parent.parent
+EXTRACTOR = load_extractor(ROOT / "fixtures" / "reference")
+
+
+def play(name: str, decider=None) -> list[dict]:
+    call = Call(name, EXTRACTOR, decider or RuleDecider())
+    script = json.loads((ROOT / "tests" / "fixtures" / f"{name}.script.json").read_text())
+    return [call.feed(line["speaker"], line["text"]) for line in script], call
+
+
+class Events(unittest.TestCase):
+    def test_raw_nova_stream_uses_content_start_stage(self):
+        r = EventReader()
+        start = {"event": {"contentStart": {"contentId": "a", "role": "USER",
+                                            "additionalModelFields": "{\"generationStage\":\"SPECULATIVE\"}"}}}
+        text = {"event": {"textOutput": {"contentId": "a", "role": "USER", "content": "quote please"}}}
+        self.assertEqual(r.read([start, text]), [{"speaker": "caller", "text": "quote please", "final": False}])
+
+    def test_flat_and_plain_events(self):
+        r = EventReader()
+        self.assertEqual(r.read({"role": "ASSISTANT", "content": "hi", "generationStage": "FINAL"})[0]["speaker"], "agent")
+        self.assertEqual(r.read({"speaker": "caller", "text": "hello"}), [{"speaker": "caller", "text": "hello", "final": True}])
+        self.assertEqual(r.read({"role": "USER", "content": '{ "interrupted" : true }'}), [])
+
+
+class Engine(unittest.TestCase):
+    def test_quote_call(self):
+        steps, call = play("demo_quote_call")
+        self.assertEqual({k: v["value"] for k, v in call.variables.items()},
+                         {"customer_number": "204511", "icao": "KVNY", "tail_number": "N88NW"})
+        fired = [f["function"] for s in steps for f in s["fired"]]
+        self.assertEqual(fired.count("fuel_quote"), 1)  # called once, as soon as customer + location were both known
+        decisions = [s["decision"]["function"] for s in steps if s["decision"]]
+        self.assertEqual(decisions, ["fuel_quote", "tail_check"])
+        self.assertIn("0.2650", steps[2]["decision"]["say"])
+
+    def test_dispute_call_surfaces_fees_then_price(self):
+        steps, _ = play("demo_dispute_location")
+        self.assertEqual([s["decision"]["function"] for s in steps if s["decision"]], ["dispute_check", "fuel_quote"])
+
+    def test_frustrated_call(self):
+        steps, call = play("demo_frustrated_caller")
+        decisions = [s["decision"]["function"] for s in steps if s["decision"]]
+        self.assertIn("escalate", decisions)
+        self.assertEqual(call.variables["tail_number"]["value"], "N512BT")  # re-asked after a cut-off "bravo tango"
+        self.assertTrue(any("incomplete" in p for s in steps for p in s["prompts"]))
+
+    def test_ask_before_variables_then_surface_when_ready(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        first = call.feed("caller", "What's your price per gallon?")
+        self.assertFalse(first["decision"]["ready"])
+        self.assertEqual(first["decision"]["missing"], ["customer_number", "icao"])
+        call.feed("caller", "It's Northwind Aviation.")
+        last = call.feed("caller", "We're going into Teterboro.")
+        self.assertEqual(last["decision"]["function"], "fuel_quote")
+        self.assertTrue(last["decision"]["ready"])
+        self.assertEqual(last["decision"]["by"], "waiting")
+
+    def test_speculative_text_changes_nothing(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        call.feed("caller", "account 204511 quote at Teterboro", final=False)
+        self.assertEqual(call.variables, {})
+        self.assertEqual(call.results, {})
+
+    def test_agent_lines_fill_variables_but_are_not_decided(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        out = call.feed("agent", "Is that for Northwind at Van Nuys? What price did you get last time?")
+        self.assertEqual(out["decision"], None)
+        self.assertEqual([f["function"] for f in out["fired"]][0], "fuel_quote")
+
+
+class FakeWinnow(BaseHTTPRequestHandler):
+    pick = "fuel_quote"
+    seen = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeWinnow.seen.append(body)
+        keys = list(body["questions"]["answer_with"]["criteria"])
+        probs = {k: (0.8 if k == self.pick else 0.2 / (len(keys) - 1)) for k in keys}
+        out = json.dumps({"answers": {"answer_with": {"type": "choice", "choice": self.pick, "probabilities": probs,
+                                                      "confidence": 0.6}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def log_message(self, *a):
+        pass
+
+
+class Winnow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = HTTPServer(("127.0.0.1", 0), FakeWinnow)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def test_choice_request_and_answer(self):
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url))
+        call.feed("caller", "Northwind, account 204511.")
+        out = call.feed("caller", "Flying into Van Nuys, what would that run us?")
+        self.assertEqual(out["decision"]["function"], "fuel_quote")
+        self.assertEqual(out["decision"]["by"], "winnow")
+        self.assertAlmostEqual(out["decision"]["p"], 0.8)
+        q = FakeWinnow.seen[-1]["questions"]["answer_with"]
+        self.assertEqual(q["type"], "choice")
+        self.assertIn("none", q["criteria"])
+        self.assertEqual(FakeWinnow.seen[-1]["state"]["known_so_far"]["icao"], "Sunset Aviation Services")
+
+    def test_none_and_low_confidence_surface_nothing(self):
+        FakeWinnow.pick = "none"
+        try:
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url))
+            self.assertIsNone(call.feed("caller", "Thanks, have a good one.")["decision"])
+        finally:
+            FakeWinnow.pick = "fuel_quote"
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), min_p=0.9)
+        self.assertIsNone(call.feed("caller", "Northwind at Van Nuys, price?")["decision"])
+
+    def test_unreachable_winnow_falls_back_to_rules(self):
+        call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))
+        out = call.feed("caller", "Northwind at Van Nuys, what's the price per gallon?")
+        self.assertEqual(out["decision"]["function"], "fuel_quote")
+        self.assertEqual(out["decision"]["by"], "rules (winnow unavailable)")
+
+
+class Api(unittest.TestCase):
+    def test_app_events(self):
+        app = App({"DECIDER": "rules"})
+        out = app.events("c1", [{"role": "USER", "content": "Northwind account 204511.", "generationStage": "FINAL"},
+                                {"role": "USER", "content": "Price per gallon at Teterboro?", "generationStage": "FINAL"}])
+        self.assertEqual(out["variables"], {"customer_number": "204511", "icao": "KTEB"})
+        self.assertEqual(out["decision"]["function"], "fuel_quote")
+
+
+if __name__ == "__main__":
+    unittest.main()

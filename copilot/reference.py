@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from django.conf import settings
-
 DISPUTE_WORDS = re.compile(r"\b(disputes?|disputed|chargebacks?|billing complaints?)\b", re.IGNORECASE)
 NOTE_BREAK = re.compile(r"\n|•|\||;|(?<!\d)\.(?!\d)")  # a period inside $1.10 is not a break
 FEE_WORD = re.compile(r"\bfees?\b", re.IGNORECASE)
@@ -156,4 +154,6 @@ def _cached(directory: str) -> Reference:
 
 
 def get() -> Reference:
+    from django.conf import settings  # imported here so decisions/ can use load() without Django
+
     return _cached(str(settings.REFERENCE_DIR))

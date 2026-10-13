@@ -1,5 +1,9 @@
 # Voice-2-Decisions
 
+> **Speech handled upstream (Amazon Nova Sonic)?** Use [`decisions/`](decisions/README.md): transcript text in,
+> variables parsed, functions auto-called, Winnow-12B surfaces the result the caller asked for. Two containers,
+> model downloaded from this repo's GitHub release.
+
 A live call copilot. A mono call recording or stream goes in; it works out who's speaking (agent / caller), transcribes,
 and fires three use cases while the call is happening:
 
