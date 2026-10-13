@@ -18,6 +18,7 @@ services:
       WINNOW_CONTEXT: ${WINNOW_CONTEXT:-4096}
     volumes:
       - ./models/winnow:/models:ro
+    networks: [decide]  # no internet: only the api can reach it
     restart: unless-stopped
 
   api:
@@ -41,6 +42,12 @@ services:
       EXTRACT_MODEL_TIMEOUT: ${EXTRACT_MODEL_TIMEOUT:-3}
     ports:
       - "${PORT:-8000}:8000"
+    networks: [decide, default]  # default: internet for Bedrock and the webhook
     depends_on:
       - winnow
     restart: unless-stopped
+
+networks:
+  # Winnow sits only on this network: internal, so no route to the internet, and its port is never published.
+  decide:
+    internal: true

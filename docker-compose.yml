@@ -27,6 +27,7 @@ services:
     volumes:
       - ./models/winnow:/models:ro
       - ./winnow:/wrap:ro
+    networks: [decide]  # no internet: only the api can reach it
     restart: unless-stopped
 
   # The API: transcript events in, variables / function results / decisions out. Falls back to keyword rules while
@@ -51,6 +52,7 @@ services:
       EXTRACT_MODEL_TIMEOUT: ${EXTRACT_MODEL_TIMEOUT:-3}
     ports:
       - "${PORT:-8000}:8000"
+    networks: [decide, default]  # default: internet for Bedrock and the webhook
     # Real reference data: put customers.csv + location_notes.csv (+ disputes.csv, fleet.csv, airport_aliases.csv)
     # in ./reference, uncomment, and set REFERENCE_DIR=/reference in .env.
     # volumes:
@@ -58,3 +60,8 @@ services:
     depends_on:
       - winnow
     restart: unless-stopped
+
+networks:
+  # Winnow sits only on this network: internal, so no route to the internet, and its port is never published.
+  decide:
+    internal: true

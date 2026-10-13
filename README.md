@@ -212,7 +212,7 @@ the API while Winnow is loading or if it stops answering.
 | `decisions/simulate.py` | stream a scripted call like Nova Sonic (partials, then final text, in real time) |
 | `decisions/test_decisions.py` | tests (`python -m unittest decisions.test_decisions`) |
 | `reference/`, `demos/` | sample customers / locations / fleet, and three demo calls |
-| `winnow/serve.py` | starts winnow-server inside its container |
+| `winnow/serve.py`, `winnow/guard.py` | starts winnow-server inside its container, behind the endpoint allowlist |
 | `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
 | `scripts/ecr_push.sh`, `scripts/ecr_deploy.sh`, `docker-compose.ecr.yml`, `winnow/Dockerfile` | private ECR images: build and push, then pull and run on the instance |
@@ -460,6 +460,56 @@ then `docker compose up -d`. `CUSTOMERS_FILE` can also be a full path inside the
 `scripts/ecr_push.sh`, and set the same `CUSTOMERS_FILE="..."` in `.env` (or the environment) when you run
 `scripts/ecr_deploy.sh` or `scripts/ecs_deploy.sh`; the ECS script puts it in the task definition. Don't commit the
 real file: it stays in your working copy and the private image only.
+
+## Security guardrails
+
+For a security review. Winnow is a classifier here: it is asked typed questions and answers with probabilities over
+options the API wrote. It never generates text that reaches the caller, the agent or a function.
+
+**1. Winnow has no internet.**
+- *docker compose:* Winnow is only on the `decide` network, which is `internal: true`: no route out of the host, and
+  its port is never published. Only the API is on it (the API is also on the default network, for Bedrock and the
+  webhook). Checked here: a container on an internal network gets "Network is unreachable" for any outside address.
+- *ECS:* both containers share the instance's network (host mode), so the boundary is the instance. Run it in
+  **private subnets with no NAT gateway**, so nothing on the instance has a route to the internet, and give the VPC
+  endpoints for the AWS services it uses. Winnow also listens on 127.0.0.1 only there (`WINNOW_HOST`). This is simpler
+  than splitting Winnow into its own task, which would need awsvpc networking, a second task and service discovery
+  for the same result. Without NAT, `DECISION_WEBHOOK_URL` can only point inside the VPC.
+
+  ```bash
+  VPC=vpc-...; SUBNETS="subnet-a subnet-b"; SG=sg-...  # SG: allow 443 from the instance's security group
+  for svc in ecr.api ecr.dkr ssm logs ecs ecs-agent ecs-telemetry bedrock-runtime ssmmessages ec2messages; do
+    aws ec2 create-vpc-endpoint --vpc-id $VPC --vpc-endpoint-type Interface --service-name com.amazonaws.$AWS_REGION.$svc \
+      --subnet-ids $SUBNETS --security-group-ids $SG --private-dns-enabled
+  done
+  aws ec2 create-vpc-endpoint --vpc-id $VPC --service-name com.amazonaws.$AWS_REGION.s3 \
+    --route-table-ids <private route table>   # ECR image layers and the model file
+  ```
+  Then run `scripts/ecs_deploy.sh` with those private `SUBNET_IDS`, and `ALLOWED_CIDR` set to the range the UI calls
+  from inside your network.
+
+**2. Winnow can only answer inside the harness.**
+- winnow-server also has a free-text chat endpoint (`/v1/chat/completions`), inspection and metrics. It runs on
+  127.0.0.1 inside its container, and a small allowlist in front of it (`winnow/guard.py`) passes only
+  `POST /v1/systemone` and `GET /health`. Everything else gets 403, and request bodies over 64 KB get 413.
+- The API accepts an answer only if it is one of the options it offered (`checked_choice` in `decisions/decider.py`).
+  Anything else surfaces no decision, and the agent carries on as normal. A pick between close names that isn't one
+  of the names counts as "none of these", so the agent asks for the account number. Yes/no answers must be a
+  probability between 0 and 1, and anything else counts as no (`checked_yes`). Probabilities for options that weren't
+  offered are dropped.
+
+**3. Every variable is checked before a function may use it.** One gate (`Call.valid` in `decisions/engine.py`) checks
+every value, whether it came from the parser, Winnow or GPT 6 Luna:
+- **customer_number:** must be an account in the customers file.
+- **icao:** must be an airport in `location_notes.csv`.
+- **tail_number:** must be a well-formed registration of 2 to 10 letters and digits.
+
+Anything else is refused and logged, and functions never see it. Luna's answers are checked before they are even
+looked up (`decisions/model_extract.py`). A tail must be 2 to 10 letters and digits. A company name must be letters,
+digits, spaces and `& . , ' -` only, at most 80 characters. Luna's text is never passed on as it is: it is only ever
+matched against `customers.csv` and the fleet.
+
+Tests: the `Guardrails` class in `decisions/test_decisions.py`.
 
 ## Notes: omitted for now
 

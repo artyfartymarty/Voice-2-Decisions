@@ -14,6 +14,7 @@ only values that exist in the reference data, or a valid registration, can fill 
     icao              ICAO / IATA, spelled or phonetic, FBO or airport name ("Van Nuys" -> KVNY)
     tail_number       registration over several breaths, re-asks and corrections ("November eight eight ..." -> N88NW)
 """
+import logging
 import re
 import time
 from difflib import SequenceMatcher
@@ -22,6 +23,7 @@ from . import extract, slots
 
 from .functions import BY_NAME, FUNCTIONS
 
+log = logging.getLogger(__name__)
 SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -50,8 +52,24 @@ class Call:
         self._unsure: dict[str, dict] = {}  # this line's fuzzy matches, for Winnow to settle: var -> {heard, options}
 
     # --- variables ---
+    def valid(self, name: str, value) -> bool:
+        """The gate every variable passes, whoever proposed it (parser, Winnow or the extract model): an account in
+        customers.csv, an airport in location_notes.csv, or a well-formed registration. Functions only see these."""
+        if not isinstance(value, str):
+            return False
+        if name == "customer_number":
+            return value in self.extractor.customers
+        if name == "icao":
+            return value in self.extractor.ref.locations
+        if name == "tail_number":
+            return bool(re.fullmatch(r"[A-Z0-9]{2,10}", value)) and bool(extract.registration_country(value))
+        return False
+
     def _set(self, name, value, label="", confidence=1.0, heard="", speaker=""):
         if self.variables.get(name, {}).get("value") == value:
+            return None
+        if not self.valid(name, value):
+            log.warning("variable %s=%.40r refused: not in the reference data or not a valid format", name, value)
             return None
         self.variables[name] = {"value": value, "label": label, "confidence": confidence, "heard": heard, "speaker": speaker}
         return name

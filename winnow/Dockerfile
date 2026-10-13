@@ -2,5 +2,5 @@
 # builds from EldanRing/winnow-inference; nothing from this repo is mounted at run time.
 ARG BASE=winnow-inference:a50c7d0
 FROM ${BASE}
-COPY serve.py /wrap/serve.py
+COPY serve.py guard.py /wrap/
 ENTRYPOINT ["python3", "/wrap/serve.py", "--model", "q8"]

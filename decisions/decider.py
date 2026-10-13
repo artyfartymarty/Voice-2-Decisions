@@ -107,38 +107,40 @@ class WinnowDecider:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
-        body = json.dumps(self.request_body(latest, recent, variables, unsure)).encode()
+        request = self.request_body(latest, recent, variables, unsure)
+        body = json.dumps(request).encode()
         t0 = time.perf_counter()
         try:
             req = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 answers = json.loads(resp.read())["answers"]
-            answer = answers["answer_with"]
-            probs = {k: float(v) for k, v in (answer.get("probabilities") or answer.get("probs") or {}).items()}
-            pick = answer.get("choice") or answer.get("selected") or answer.get("answer") or (max(probs, key=probs.get) if probs else None)
-            if pick is None:
-                raise ValueError(f"unrecognised choice answer: {answer}")
         except Exception as exc:
             log.warning("winnow decision unavailable (%s); using keyword rules for 30 s", exc)
             self._down_until = time.monotonic() + 30
             return {**self.fallback.decide(latest, recent, variables), "by": "rules (winnow unavailable)"}
+        questions = request["questions"]
+        pick, probs = checked_choice(answers.get("answer_with"), questions["answer_with"]["criteria"])
+        if pick is None:  # not one of the options it was given: surface nothing (the agent carries on as normal)
+            log.warning("winnow answer rejected: %.200s", answers.get("answer_with"))
+            return {"function": None, "p": 0.0, "by": "winnow (answer rejected)", "variables": {}}
         settled = {}
-        for key, a in answers.items():
-            if key.startswith("which_") and a.get("choice") not in (None, "none"):
-                settled[key[len("which_"):]] = {"value": a["choice"], "p": round(float((a.get("probabilities") or {}).get(a["choice"], 0)), 3)}
-        for flag in ("tail_said", "customer_said"):
-            if flag in answers:
-                settled[flag] = float(answers[flag].get("noul", 0.0))
-        return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, answer.get("confidence", 0.0)), 3),
-                "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name, "variables": settled,
-                "ms": round((time.perf_counter() - t0) * 1000)}
-
+        for qid, q in questions.items():
+            if qid.startswith("which_"):
+                choice, cp = checked_choice(answers.get(qid), q["criteria"])
+                if choice not in (None, "none"):
+                    settled[qid[len("which_"):]] = {"value": choice, "p": round(cp.get(choice, 0.0), 3)}
+            elif q["type"] == "noul":
+                settled[qid] = checked_yes(answers.get(qid))
+        return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, 0.0), 3),
+                "confidence": answers["answer_with"].get("confidence"), "probabilities": probs, "by": self.name,
+                "variables": settled, "ms": round((time.perf_counter() - t0) * 1000)}
 
     def choose(self, what: str, heard: str, latest: str, recent: list[dict], options: dict) -> dict | None:
         """A name or tail with no exact match: which of these close ones did the caller mean, or none of them?
         Returns {"value": option or None for none, "p": float}, or None when Winnow can't be reached."""
         if time.monotonic() < self._down_until:
             return None
+        criteria = {**options, "none": f"none of these; a {what} that isn't on file"}
         body = {"model": self.model,
                 "state": {"call": "A caller is on the phone with an aviation fuel desk agent.",
                           "recent_lines": [f"{line['speaker']}: {line['text']}" for line in recent[-6:]],
@@ -148,22 +150,48 @@ class WinnowDecider:
                     "instructions": f"Speech-to-text heard the {what} as \"{heard}\", which isn't on file exactly. It "
                                     f"may be misheard. Which of these {what}s on file did the caller mean? Pick none "
                                     f"if none of them fits.",
-                    "criteria": {**options, "none": f"none of these; a {what} that isn't on file"}}}}
+                    "criteria": criteria}}}
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
             req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                a = json.loads(resp.read())["answers"]["which"]
-            probs = {k: float(v) for k, v in (a.get("probabilities") or {}).items()}
-            pick = a.get("choice") or (max(probs, key=probs.get) if probs else None)
+                answer = json.loads(resp.read())["answers"].get("which")
         except Exception as exc:
             log.warning("winnow choice unavailable (%s)", exc)
             return None
-        if pick is None:
-            return None
-        return {"value": None if pick == "none" else pick, "p": round(probs.get(pick, a.get("confidence") or 0.0), 3)}
+        pick, probs = checked_choice(answer, criteria)
+        if pick is None:  # an answer outside the options counts as "none": the agent asks for the account number
+            log.warning("winnow choice rejected: %.200s", answer)
+            return {"value": None, "p": 0.0}
+        return {"value": None if pick == "none" else pick, "p": round(probs.get(pick, 0.0), 3)}
+
+
+def _probability(v) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.0 <= float(v) <= 1.0:
+        return None  # also rejects NaN, which fails both comparisons
+    return float(v)
+
+
+def checked_choice(answer, criteria: dict) -> tuple[str | None, dict]:
+    """Winnow's answer to a choice question, kept only if it is one of the options offered. Probabilities for anything
+    else, or that aren't numbers in [0, 1], are dropped. Returns (pick or None, probabilities)."""
+    if not isinstance(answer, dict):
+        return None, {}
+    raw = answer.get("probabilities") or answer.get("probs") or {}
+    probs = {k: p for k, v in (raw.items() if isinstance(raw, dict) else []) if k in criteria
+             and (p := _probability(v)) is not None}
+    pick = answer.get("choice", answer.get("selected", answer.get("answer")))
+    if pick is None and probs:
+        pick = max(probs, key=probs.get)
+    return (pick, probs) if isinstance(pick, str) and pick in criteria else (None, probs)
+
+
+def checked_yes(answer) -> float:
+    """Winnow's answer to a yes/no question: the probability of yes, or 0.0 (no) for anything that isn't one."""
+    p = _probability(answer.get("noul")) if isinstance(answer, dict) else None
+    return 0.0 if p is None else p
 
 
 def from_env(env) -> RuleDecider | WinnowDecider:
