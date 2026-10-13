@@ -15,12 +15,12 @@ from .events import EventReader
 from .server import App
 
 ROOT = Path(__file__).resolve().parent.parent
-EXTRACTOR = load_extractor(ROOT / "fixtures" / "reference")
+EXTRACTOR = load_extractor(ROOT / "reference")
 
 
 def play(name: str, decider=None) -> list[dict]:
     call = Call(name, EXTRACTOR, decider or RuleDecider())
-    script = json.loads((ROOT / "tests" / "fixtures" / f"{name}.script.json").read_text())
+    script = json.loads((ROOT / "demos" / f"{name}.json").read_text())
     return [call.feed(line["speaker"], line["text"]) for line in script], call
 
 

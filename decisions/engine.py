@@ -7,7 +7,7 @@
 If the caller asks for something whose variables aren't filled yet, the decision says what to ask for, and the result
 is surfaced on its own as soon as the function fires (no second model call).
 
-Variables come from the deterministic extractor the rest of the repo uses (copilot/extract.py, copilot/slots.py), so
+Variables come from the deterministic extractor (extract.py, slots.py), so
 only values that exist in the reference data, or a valid registration, can fill one:
 
     customer_number   account number or company name, fuzzy + phonetic ("North Wind Aviation" -> 204511)
@@ -18,7 +18,7 @@ import re
 import time
 from difflib import SequenceMatcher
 
-from copilot import extract, slots
+from . import extract, slots
 
 from .functions import BY_NAME, FUNCTIONS
 
@@ -32,7 +32,7 @@ class Call:
         self.extractor, self.decider, self.model = extractor, decider, model
         # "model": tail numbers and customer names come from the external model (Winnow says one was said -> the model
         # pulls it out -> checked against the formats / customers.csv / fleet -> read back). Account numbers said as
-        # digits are still matched directly. "parser": the list matching and tail parser in copilot/. Without a model
+        # digits are still matched directly. "parser": the list matching and tail parser (extract.py, slots.py). Without a model
         # configured, "model" can't run, so the parser is used.
         self.by_model = mode == "model" and model is not None
         self._name_hint = False  # this line has something the list matcher took for a customer name

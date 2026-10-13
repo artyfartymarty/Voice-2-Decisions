@@ -4,9 +4,7 @@
     GET    /calls/<id>          the call's variables, function results, current decision and transcript
     DELETE /calls/<id>          forget a call
     GET    /functions           the functions and the variables each one needs
-    GET    /demos               the demo calls (tests/fixtures/*.script.json) the console can replay
     GET    /healthz             liveness + which decider is in use
-    GET    /                    a small console: type caller / agent lines and watch it work
 
     python -m decisions.server            # listens on 0.0.0.0:8000 (PORT to change)
 
@@ -30,13 +28,11 @@ from .functions import FUNCTIONS
 
 log = logging.getLogger("decisions")
 ROOT = Path(__file__).resolve().parent
-CONSOLE = (ROOT / "console.html").read_bytes()
-DEMOS = sorted((ROOT.parent / "tests" / "fixtures").glob("*.script.json"))
 
 
 class App:
     def __init__(self, env=os.environ):
-        ref_dir = env.get("REFERENCE_DIR") or str(ROOT.parent / "fixtures" / "reference")
+        ref_dir = env.get("REFERENCE_DIR") or str(ROOT.parent / "reference")
         self.extractor = load_extractor(ref_dir, float(env.get("TAIL_MIN_CONFIDENCE", "0.8")))
         self.decider = decider_mod.from_env(env)
         self.min_p = float(env.get("DECIDE_MIN_P", "0.5"))
@@ -87,12 +83,8 @@ def make_handler(app: App):
 
         def do_GET(self):
             path = self.path.split("?")[0]
-            if path == "/":
-                return self._send(200, CONSOLE, "text/html; charset=utf-8")
             if path == "/healthz":
                 return self._send(200, {"ok": True, "decider": app.decider.name, "calls": len(app.calls)})
-            if path == "/demos":
-                return self._send(200, {p.name.split(".")[0]: json.loads(p.read_text()) for p in DEMOS})
             if path == "/functions":
                 return self._send(200, [{"name": f.name, "needs": f.needs, "optional": f.optional, "auto": f.auto,
                                          "description": f.description} for f in FUNCTIONS])

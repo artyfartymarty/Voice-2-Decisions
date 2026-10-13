@@ -1,6 +1,6 @@
 """Static reference data the use-case tools look things up in.
 
-Two flat files in REFERENCE_DIR (synthetic copies in fixtures/reference/; point REFERENCE_DIR at real exports at work):
+Two flat files in REFERENCE_DIR (synthetic copies in reference/; point REFERENCE_DIR at real exports at work):
 
     customers.csv       CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
     location_notes.csv  ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (HTML)
@@ -11,7 +11,6 @@ import csv
 import html
 import re
 from dataclasses import dataclass, field
-from functools import lru_cache
 from pathlib import Path
 
 DISPUTE_WORDS = re.compile(r"\b(disputes?|disputed|chargebacks?|billing complaints?)\b", re.IGNORECASE)
@@ -146,14 +145,3 @@ def load(directory: str | Path) -> Reference:
                 ref.disputes.append(DisputeRow(row["CUSTOMER_NUMBER"].strip(), row["ICAO"].strip().upper(),
                                                int(row["DISPUTES_P12M"] or 0), (row.get("TOP_REASON") or "").strip()))
     return ref
-
-
-@lru_cache(maxsize=4)
-def _cached(directory: str) -> Reference:
-    return load(directory)
-
-
-def get() -> Reference:
-    from django.conf import settings  # imported here so decisions/ can use load() without Django
-
-    return _cached(str(settings.REFERENCE_DIR))

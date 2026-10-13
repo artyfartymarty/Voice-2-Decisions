@@ -1,6 +1,6 @@
 """Feed a call to the service and print what it decided. For testing without Nova Sonic.
 
-    python -m decisions.replay tests/fixtures/demo_quote_call.script.json      # a demo script
+    python -m decisions.replay demos/demo_quote_call.json                      # a demo call
     python -m decisions.replay calls/nova_events.jsonl                          # recorded Nova Sonic events, one per line
     python -m decisions.replay -                                                # type lines: "caller: I need a quote"
     python -m decisions.replay --url http://localhost:8000 FILE                 # against a running server
@@ -33,7 +33,7 @@ def lines_from(path: str):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("file", help=".script.json, .jsonl of events, a text file of 'speaker: text' lines, or - for stdin")
+    p.add_argument("file", help="a demo .json, .jsonl of events, a text file of 'speaker: text' lines, or - for stdin")
     p.add_argument("--url", help="running server, e.g. http://localhost:8000 (default: in-process)")
     p.add_argument("--call", default="replay")
     a = p.parse_args()

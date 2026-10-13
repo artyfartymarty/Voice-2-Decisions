@@ -334,9 +334,3 @@ def _extractor(directory: str, tail_min: float) -> Extractor:
             for row in csv.DictReader(f):
                 fleet.setdefault(row["CUSTOMER_NUMBER"].strip(), set()).add(row["TAIL_NUMBER"].strip().upper().replace("-", ""))
     return Extractor(reference.load(directory), aliases, tail_min, fleet)
-
-
-def get() -> Extractor:
-    from django.conf import settings
-
-    return _extractor(str(settings.REFERENCE_DIR), settings.TAIL_MIN_CONFIDENCE)

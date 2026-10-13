@@ -9,4 +9,4 @@ Rules:
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
 
 The graph is not committed (`graphify-out/` is in .gitignore). Build it once per checkout with `/graphify .` in Claude
-Code (or `graphify update .` for a code-only refresh); see HANDOFF.md, "Knowledge graph (graphify)".
+Code (or `graphify update .` for a code-only refresh).

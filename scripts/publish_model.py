@@ -2,8 +2,8 @@
 release on this repo. Run it once, wherever you already have the model file; scripts/fetch_model.sh then downloads
 from GitHub only.
 
-    python decisions/scripts/publish_model.py path/to/Winnow-12B-Q8_0.gguf
-    python decisions/scripts/publish_model.py C:\\Users\\you\\models\\winnow\\gguf\\Winnow-12B-Q8_0.gguf --repo you/Voice-2-Decisions
+    python scripts/publish_model.py path/to/Winnow-12B-Q8_0.gguf
+    python scripts/publish_model.py C:\\Users\\you\\models\\winnow\\gguf\\Winnow-12B-Q8_0.gguf --repo you/Voice-2-Decisions
 
 Needs the GitHub CLI, logged in with push access (`gh auth login`). Works on Windows, macOS and Linux. Each part is
 written to a temp folder, uploaded, then deleted, so it needs only ~2 GB of free disk. Re-running skips parts that
@@ -24,7 +24,7 @@ BYTES = 12669646592
 SHA256 = "b710efc4c0d048ee61eed92c5fef5ce323a4d17e7c51f9f0533cc72ae50818ea"
 PART_BYTES = 2_000_000_000  # must match scripts/fetch_model.sh
 NOTES = (f"Winnow-12B Q8_0 GGUF ({BYTES} bytes, sha256 {SHA256}), split into {PART_BYTES}-byte parts for GitHub.\n\n"
-         "decisions/scripts/fetch_model.sh downloads, joins and verifies them.\n\n"
+         "scripts/fetch_model.sh downloads, joins and verifies them.\n\n"
          "Model: EldanRing/Winnow-12B, a fine-tune of Google Gemma 4 12B. License: Apache-2.0. See MODEL_LICENSES.md.")
 
 

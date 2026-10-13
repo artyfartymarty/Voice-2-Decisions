@@ -1,6 +1,6 @@
-# Voice-2-Decisions on one NVIDIA GPU: web app + speech service + Winnow-12B.
-# Models are read from ./models (run scripts/fetch_models.sh first; scripts/setup.sh does everything).
-#   docker compose up -d --build
+# Text to decisions: Nova Sonic transcript text in, variables -> auto-called functions -> Winnow-12B picks the answer.
+#   ./setup.sh                 # first time: checks the GPU, downloads the model from GitHub, builds, starts
+#   docker compose up -d       # after that
 x-gpu: &gpu
   deploy:
     resources:
@@ -11,25 +11,15 @@ x-gpu: &gpu
             capabilities: [gpu]
 
 services:
-  # Speech: NVIDIA NeMo-Speech.cpp (prebuilt release from GitHub, SHA-pinned) serving English Nemotron ASR + Nemotron
-  # diarization on :8080 inside the network.
-  asr:
-    <<: *gpu
-    build: ./asr
-    image: voice2decisions-asr:latest
-    volumes:
-      - ./models:/models:ro
-    restart: unless-stopped
-
-  # Sentiment: Winnow-12B on winnow-server, built from EldanRing/winnow-inference on GitHub (pinned commit) for the
-  # GPU architecture in CUDA_ARCH (setup.sh sets it from nvidia-smi). Runs at 4K context: plenty for one call line,
-  # and it keeps the 12B inside VRAM.
+  # The decision model: Winnow-12B Q8 on winnow-server, built from EldanRing/winnow-inference on GitHub (pinned
+  # commit) for the GPU architecture in CUDA_ARCH (setup.sh sets it from nvidia-smi). The weights are read from
+  # ./models/winnow, which you fill (README: Get the model onto the instance).
   winnow:
     <<: *gpu
     build:
       context: https://github.com/EldanRing/winnow-inference.git#a50c7d0d8cbc5c3ba34987c5c23ea114e44ce6b5
       args:
-        CUDA_ARCH: ${CUDA_ARCH:-86;89;120}
+        CUDA_ARCH: ${CUDA_ARCH:-86}
     image: winnow-inference:a50c7d0
     entrypoint: ["python3", "/wrap/serve.py", "--model", "q8"]
     environment:
@@ -39,40 +29,30 @@ services:
       - ./winnow:/wrap:ro
     restart: unless-stopped
 
-  # Web app: Django UI + JSON API, use cases, live calls (streaming diarization from ./models/diar-hf, offline).
-  web:
-    <<: *gpu
-    build: .
-    image: voice2decisions:latest
-    env_file: .env
+  # The API: transcript events in, variables / function results / decisions out. Falls back to keyword rules while
+  # Winnow is still loading, so it is usable from the first second.
+  api:
+    build:
+      context: .
+    image: text2decisions:latest
     environment:
-      DIARIZER_MODEL_ID: /models/diar-hf
-      HF_HUB_OFFLINE: "1"
-    depends_on:
-      asr:
-        condition: service_healthy
-      winnow:
-        condition: service_started   # sentiment falls back to the word list until Winnow is up
+      WINNOW_URL: http://winnow:8091
+      DECIDE_MIN_P: ${DECIDE_MIN_P:-0.5}
+      ROLE_MAP: ${ROLE_MAP:-USER:caller,ASSISTANT:agent}
+      DECISION_WEBHOOK_URL: ${DECISION_WEBHOOK_URL:-}
+      REFERENCE_DIR: ${REFERENCE_DIR:-}
+      EXTRACT_MODE: ${EXTRACT_MODE:-model}
+      EXTRACT_MODEL_URL: ${EXTRACT_MODEL_URL:-}
+      EXTRACT_MODEL: ${EXTRACT_MODEL:-}
+      EXTRACT_MODEL_API_KEY: ${EXTRACT_MODEL_API_KEY:-}
+      EXTRACT_MODEL_REASONING: ${EXTRACT_MODEL_REASONING:-}
+      EXTRACT_MODEL_TIMEOUT: ${EXTRACT_MODEL_TIMEOUT:-3}
     ports:
-      - "${PORT:-8080}:8000"
-    volumes:
-      - v2d-data:/data
-      - ./models/diar-hf:/models/diar-hf:ro
-      # Real reference data: put customers.csv + location_notes.csv in ./reference, uncomment, set REFERENCE_DIR=/reference
-      # - ./reference:/reference:ro
+      - "${PORT:-8000}:8000"
+    # Real reference data: put customers.csv + location_notes.csv (+ disputes.csv, fleet.csv, airport_aliases.csv)
+    # in ./reference, uncomment, and set REFERENCE_DIR=/reference in .env.
+    # volumes:
+    #   - ./reference:/reference:ro
+    depends_on:
+      - winnow
     restart: unless-stopped
-
-  # Fast test suite, no GPU or models: docker compose --profile test run --rm test
-  test:
-    image: voice2decisions:latest
-    profiles: ["test"]
-    environment:
-      ASR_BACKEND: fake
-      DATA_DIR: /data
-      SQLITE_PATH: /tmp/test.sqlite3
-    volumes:
-      - v2d-data:/data
-    command: ["pytest", "-q", "-rs"]
-
-volumes:
-  v2d-data:

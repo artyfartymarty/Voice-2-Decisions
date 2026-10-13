@@ -54,7 +54,7 @@ echo
 docker compose ps
 
 step "Smoke test: replay the demo quote call through the API"
-docker compose exec -T api python -m decisions.replay --url http://localhost:8000 --call smoke tests/fixtures/demo_quote_call.script.json
+docker compose exec -T api python -m decisions.replay --url http://localhost:8000 --call smoke demos/demo_quote_call.json
 
 cat <<EOF
 
@@ -63,6 +63,6 @@ Ready. Decisions above should say [winnow, p=...]; [rules ...] means Winnow isn'
 
 From your laptop:
   ssh -L $port:localhost:$port ubuntu@<this-instance>
-then open http://localhost:$port for the console, or POST transcript events to
-  http://localhost:$port/calls/<call-id>/events
+then POST transcript events to http://localhost:$port/calls/<call-id>/events, or replay a demo call:
+  docker compose exec api python -m decisions.replay --url http://localhost:8000 demos/demo_frustrated_caller.json
 EOF

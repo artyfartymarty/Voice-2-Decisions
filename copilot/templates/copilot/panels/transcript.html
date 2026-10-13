@@ -1,9 +1,0 @@
-<div class="card grow" id="panel-transcript">
-  <h2>Transcript</h2>
-  <div class="transcript" data-scroll>
-  {% for t in turns %}
-    <p class="turn r-{{ t.role|default:'unknown'|slugify }}"><span class="who-label">{{ t.role|default:"—" }}<span class="t">{{ t.start|floatformat:1 }} s</span></span><span>{{ t.text }}</span></p>
-  {% empty %}<p class="muted">{% if call.status == "live" %}Listening…{% else %}(empty){% endif %}</p>{% endfor %}
-  {% if call.pending_text %}<p class="pending" title="{{ call.pending_text }}">Waiting for the end of the sentence…</p>{% endif %}
-  </div>
-</div>
