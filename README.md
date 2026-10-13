@@ -189,6 +189,13 @@ the API while Winnow is loading or if it stops answering.
   name rather than an exact code or account number, the same Winnow request also asks "which customer / airport did
   they mean?" over the closest few names plus "none of these", and its pick settles the variable (functions re-run if
   it changed). The agent is also prompted to read the name back. Each decision prints its round-trip time (`ms`).
+- **Misheard names and tails (main path):** when the name GPT 6 Luna pulls out isn't a customer exactly (the full name,
+  or a first word only one customer has), the customers that look or sound closest go to Winnow as one choice question
+  with the caller's line and "none of these". For "Arigo" that's Arrigo Aviation, Arrow Jet Charter and Aero Vista;
+  the sound check uses a phonetic key, so Arrigo / Arrow / Aero land together. Winnow's pick is read back to the
+  caller; "none" (or a pick below `DECIDE_MIN_P`) asks for the account number instead. A tail that isn't on the
+  customer's fleet works the same way, with the fleet's tails one or two characters off ("N47JA": N47AJ, N74AJ).
+  Winnow gets only text: Nova Sonic's transcript, never the audio.
 
 | File | What it does |
 |---|---|
@@ -435,7 +442,8 @@ from here; it follows the AWS docs above.
   (`decisions/slots.py`: phonetic alphabet, aviation digits, "one twenty three", a dropped "November", tails over several
   breaths) and the fuzzy customer-name matcher (`decisions/extract.py`: "Blue Herring" -> Blue Heron) are not the main
   path. They are used only with `EXTRACT_MODE=parser` or when no `EXTRACT_MODEL_URL` is set. On the main path the
-  matcher only checks the model's answer against `customers.csv`; account numbers said as digits still match directly.
+  model's answer is checked against `customers.csv`, and Winnow chooses among close names when it isn't exact (see
+  Misheard names and tails); account numbers said as digits still match directly.
 - **No special handling of mid-tail corrections** ("forget the November, I meant tango", "scratch that") on the main
   path: the model sees the caller's line and the few before it and is trusted to resolve them; the format, fleet and
   customer-list checks and the agent's read-back are the safety net. (The parser handles them when it's in use, and

@@ -104,34 +104,61 @@ class Call:
         prompts.append(msg)
         self.prompts.append(msg)
 
+    def _choose(self, what: str, heard: str, text: str, options: dict) -> dict | None:
+        """Winnow picks which of the close matches the caller meant. None: Winnow unavailable (or the rules decider)."""
+        return self.decider.choose(what, heard, text, self.transcript, options) if options else None
+
     def _model_customer(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
-        """Winnow says the caller named their company: the model pulls the name out, then it must match customers.csv."""
+        """Winnow says the caller named their company: the model pulls the name out, then it must match customers.csv.
+        With no exact match, Winnow chooses among the names that look or sound closest ("Arigo": Arrigo, Arrow, Aero)."""
         said = self.model.extract("customer", text, self._recent())
         if not said:
             return []
-        e = self.extractor.customer(said)
-        if e is None:
-            self._prompt(f"Caller said they're with \"{said}\", which isn't a customer on file. Ask for the account number.", prompts)
+        number, p, how = self.extractor.exact_customer(said), 1.0, ""
+        if number is None:
+            close = self.extractor.closest_customers(said)
+            pick = self._choose("customer", said, text, {n: name for n, name, _ in close})
+            if pick and pick["value"] and pick["p"] >= self.min_p:
+                number, p, how = pick["value"], pick["p"], "winnow"
+            elif pick is None and (e := self.extractor.customer(said)):  # no Winnow: the plain fuzzy match
+                number, p = e.value, e.confidence
+            else:
+                self._prompt(f"Caller said they're with \"{said}\", which doesn't match a customer on file. "
+                             f"Ask for the account number.", prompts)
+                return []
+        name = self.extractor.customers[number][0]
+        if not self._set("customer_number", number, name, p, said, speaker):
             return []
-        if not self._set("customer_number", e.value, e.label, e.confidence, said, speaker):
-            return []
-        self._prompt(f"Confirm the account: caller said \"{said}\", matched {e.label} ({e.value}).", prompts)
+        if how:
+            self.variables["customer_number"]["settled_by"] = how
+        self._prompt(f"Confirm the account: caller said \"{said}\", matched {name} ({number}).", prompts)
         return ["customer_number"]
 
     def _normalize_tail(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
-        """Winnow says the caller said a full tail: the model writes it out, then it must be valid and on the fleet."""
+        """Winnow says the caller said a full tail: the model writes it out, then it must be valid and on the fleet.
+        A tail that isn't on the customer's fleet goes to Winnow with the fleet's closest tails ("N47JA": N47AJ ...)."""
         tail = self.model.extract("tail_number", text, self._recent())
         country = extract.registration_country(tail or "")
         if not country:
             return []
         fleet = self.extractor.fleet.get(self.variables.get("customer_number", {}).get("value") or "", set())
+        heard, how, p = tail, "", 0.8
         if fleet and tail not in fleet:
-            self._prompt(f"Tail {tail} isn't on file for this customer. Confirm it with the caller.", prompts)
-            return []
+            off = {t: extract.edits(t, tail) for t in fleet}  # one or two letters or digits misheard or swapped
+            close = [t for t in sorted(off, key=off.get)[:4] if off[t] <= 2]
+            pick = self._choose("aircraft tail number", tail, text, {t: t for t in close})
+            if not (pick and pick["value"] and pick["p"] >= self.min_p):
+                self._prompt(f"Tail {tail} isn't on file for this customer. Confirm it with the caller.", prompts)
+                return []
+            tail, how, p = pick["value"], "winnow", pick["p"]
+            country = extract.registration_country(tail) or country
         self.tail_slot.update(value=tail, partial="", partial_by="", pending=False)
-        if not self._set("tail_number", tail, country, 0.8, text, speaker):
+        if not self._set("tail_number", tail, country, p, text, speaker):
             return []
-        self._prompt(f"Read the tail number back to the caller: {tail}.", prompts)
+        if how:
+            self.variables["tail_number"]["settled_by"] = how
+        said = f" (heard {heard})" if heard != tail else ""
+        self._prompt(f"Read the tail number back to the caller: {tail}{said}.", prompts)
         return ["tail_number"]
 
     def _settle(self, picks: dict, speaker: str) -> list[str]:

@@ -49,6 +49,9 @@ class RuleDecider:
                 return {"function": fn, "p": 1.0, "by": self.name, **extra}
         return {"function": None, "p": 1.0, "by": self.name, **extra}
 
+    def choose(self, what: str, heard: str, latest: str, recent: list[dict], options: dict) -> dict | None:
+        return None  # no model to ask: the caller keeps the old fuzzy behaviour
+
 
 class WinnowDecider:
     name = "winnow"
@@ -129,6 +132,38 @@ class WinnowDecider:
         return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, answer.get("confidence", 0.0)), 3),
                 "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name, "variables": settled,
                 "ms": round((time.perf_counter() - t0) * 1000)}
+
+
+    def choose(self, what: str, heard: str, latest: str, recent: list[dict], options: dict) -> dict | None:
+        """A name or tail with no exact match: which of these close ones did the caller mean, or none of them?
+        Returns {"value": option or None for none, "p": float}, or None when Winnow can't be reached."""
+        if time.monotonic() < self._down_until:
+            return None
+        body = {"model": self.model,
+                "state": {"call": "A caller is on the phone with an aviation fuel desk agent.",
+                          "recent_lines": [f"{line['speaker']}: {line['text']}" for line in recent[-6:]],
+                          "caller_latest_line": latest},
+                "questions": {"which": {
+                    "type": "choice",
+                    "instructions": f"Speech-to-text heard the {what} as \"{heard}\", which isn't on file exactly. It "
+                                    f"may be misheard. Which of these {what}s on file did the caller mean? Pick none "
+                                    f"if none of them fits.",
+                    "criteria": {**options, "none": f"none of these; a {what} that isn't on file"}}}}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        try:
+            req = urllib.request.Request(self.url, data=json.dumps(body).encode(), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                a = json.loads(resp.read())["answers"]["which"]
+            probs = {k: float(v) for k, v in (a.get("probabilities") or {}).items()}
+            pick = a.get("choice") or (max(probs, key=probs.get) if probs else None)
+        except Exception as exc:
+            log.warning("winnow choice unavailable (%s)", exc)
+            return None
+        if pick is None:
+            return None
+        return {"value": None if pick == "none" else pick, "p": round(probs.get(pick, a.get("confidence") or 0.0), 3)}
 
 
 def from_env(env) -> RuleDecider | WinnowDecider:

@@ -92,6 +92,28 @@ def similarity(a: str, b: str) -> float:
     return max(spelled, 0.9 * sound)
 
 
+GENERIC_WORDS = {"aviation", "air", "jet", "jets", "flight", "charter", "llc", "inc", "the", "from", "with"}
+
+
+def sound_alike(a: str, b: str) -> float:
+    """How alike two squashed strings look or sound: spelling ratio, or 0.9 x the ratio of their phonetic keys."""
+    spelled = SequenceMatcher(None, a, b).ratio()
+    ka, kb = phonetic(a), phonetic(b)
+    sound = 0.9 * SequenceMatcher(None, ka, kb).ratio() if len(ka) >= 2 and len(kb) >= 2 else 0.0
+    return max(spelled, sound)
+
+
+def edits(a: str, b: str) -> int:
+    """Characters changed, added, dropped or swapped to turn a into b (Damerau-Levenshtein): "N47JA" -> "N47AJ" is 1."""
+    d = [[i + j if not i * j else 0 for j in range(len(b) + 1)] for i in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            d[i][j] = min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] != b[j - 1]))
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + 1)
+    return d[-1][-1]
+
+
 def words(text: str) -> list[str]:
     text = re.sub(r"\b([A-Za-z0-9])-(?=[A-Za-z0-9]\b)", r"\1 ", text)  # "K-T-E-B" -> "K T E B"; keeps "G-ABCD"
     return re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*", text)
@@ -238,6 +260,29 @@ class Extractor:
                     if score >= 0.82 and (best is None or score > best.confidence):
                         best = Entity("customer", number, name, round(score, 3), window)
         return best
+
+    def exact_customer(self, said: str) -> str | None:
+        """The customer `said` names outright: the full name, or a first word only one customer has ("Arrow")."""
+        heard = squash(said)
+        for number, (_, core) in self.customers.items():
+            if heard == squash(core):
+                return number
+        toks = words(said)
+        return self.short_names.get(squash(toks[0])) if toks else None
+
+    def closest_customers(self, said: str, top: int = 4, floor: float = 0.7) -> list[tuple[str, str, float]]:
+        """Customers whose name looks or sounds like `said` ("Arigo" -> Arrigo, Arrow, Aero ...), best first, as
+        (number, name, score). The candidates Winnow chooses between when a name has no exact match."""
+        heard = [w for w in words(said) if w.lower() not in GENERIC_WORDS] or words(said)
+        sources = {squash(said), squash(heard[0]) if heard else ""} - {""}
+        scored = []
+        for number, (name, core) in self.customers.items():
+            parts = core.split()
+            targets = {squash(core), squash(parts[0]) if parts else "", squash(" ".join(parts[:2]))} - {""}
+            score = max((sound_alike(a, b) for a in sources for b in targets), default=0.0)
+            if score >= floor:
+                scored.append((number, name, round(score, 3)))
+        return sorted(scored, key=lambda t: -t[2])[:top]
 
     # --- locations ---
     def location(self, text: str) -> Entity | None:

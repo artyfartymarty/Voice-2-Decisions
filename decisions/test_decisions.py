@@ -166,9 +166,15 @@ class FakeWinnow(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         FakeWinnow.seen.append(body)
-        keys = list(body["questions"]["answer_with"]["criteria"])
-        probs = {k: (0.8 if k == self.pick else 0.2 / (len(keys) - 1)) for k in keys}
-        answers = {"answer_with": {"type": "choice", "choice": self.pick, "probabilities": probs, "confidence": 0.6}}
+        answers = {}
+        if "answer_with" in body["questions"]:
+            keys = list(body["questions"]["answer_with"]["criteria"])
+            probs = {k: (0.8 if k == self.pick else 0.2 / (len(keys) - 1)) for k in keys}
+            answers["answer_with"] = {"type": "choice", "choice": self.pick, "probabilities": probs, "confidence": 0.6}
+        if "which" in body["questions"]:  # a name or tail with no exact match: which close one did they mean?
+            options = body["questions"]["which"]["criteria"]
+            pick = self.which.get("which", next(iter(options)))
+            answers["which"] = {"type": "choice", "choice": pick, "probabilities": {k: 0.9 if k == pick else 0.02 for k in options}}
         for qid, q in body["questions"].items():
             if qid.startswith("which_"):
                 pick = self.which.get(qid, next(iter(q["criteria"])))
@@ -298,7 +304,7 @@ class Winnow(unittest.TestCase):
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Acme Rockets"))
         out = call.feed("caller", "This is Sam from Acme Rockets.")
         self.assertNotIn("customer_number", call.variables)
-        self.assertIn("isn't a customer on file", out["prompts"][-1])
+        self.assertIn("doesn't match a customer on file", out["prompts"][-1])
 
         # Winnow says no name was said: the model isn't asked.
         FakeWinnow.customer_said = 0.1
@@ -308,6 +314,52 @@ class Winnow(unittest.TestCase):
         finally:
             FakeWinnow.customer_said = 0.9
         self.assertEqual(model.asked, [])
+
+    def test_misheard_name_winnow_picks_among_look_and_sound_alikes(self):
+        # "Arigo" isn't a customer exactly; Arrigo, Arrow and Aero all look or sound close. Winnow picks the one meant.
+        FakeWinnow.which = {"which": "611377"}  # Winnow: they meant Arrow Jet Charter
+        try:
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arigo"))
+            out = call.feed("caller", "Hi, this is Dana with Arigo.")
+        finally:
+            FakeWinnow.which = {}
+        which = next(b for b in reversed(FakeWinnow.seen) if "which" in b["questions"])["questions"]["which"]
+        self.assertEqual(set(which["criteria"]), {"611204", "611377", "611590", "none"})
+        self.assertIn("Arigo", which["instructions"])
+        self.assertEqual(call.variables["customer_number"]["value"], "611377")
+        self.assertEqual(call.variables["customer_number"]["settled_by"], "winnow")
+        self.assertIn("Confirm the account", " ".join(out["prompts"]))
+
+        # Winnow says none of them: nothing is filled and the agent asks for the account number.
+        FakeWinnow.which = {"which": "none"}
+        try:
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arigo"))
+            out = call.feed("caller", "Hi, this is Dana with Arigo.")
+        finally:
+            FakeWinnow.which = {}
+        self.assertNotIn("customer_number", call.variables)
+        self.assertIn("Ask for the account number", out["prompts"][-1])
+
+        # An exact name, or a first word only one customer has, doesn't need Winnow.
+        for said, number in (("Arrow", "611377"), ("Arrigo Aviation", "611204"), ("Aero Vista", "611590")):
+            before = len(FakeWinnow.seen)
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer=said))
+            call.feed("caller", f"This is {said}.")
+            self.assertEqual(call.variables["customer_number"]["value"], number, said)
+            self.assertFalse(any("which" in b["questions"] for b in FakeWinnow.seen[before:]), said)
+
+    def test_tail_not_on_the_fleet_winnow_picks_the_close_one(self):
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(tail_number="N47JA"))
+        call.feed("caller", "Account 611377.")
+        FakeWinnow.which = {"which": "N47AJ"}
+        try:
+            out = call.feed("caller", "The tail is November four seven juliet alpha.")
+        finally:
+            FakeWinnow.which = {}
+        which = next(b for b in reversed(FakeWinnow.seen) if "which" in b["questions"])["questions"]["which"]
+        self.assertEqual(set(which["criteria"]), {"N47AJ", "N74AJ", "none"})
+        self.assertEqual(call.variables["tail_number"]["value"], "N47AJ")
+        self.assertIn("N47AJ (heard N47JA)", " ".join(out["prompts"]))
 
     def test_unreachable_winnow_falls_back_to_rules(self):
         call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))
