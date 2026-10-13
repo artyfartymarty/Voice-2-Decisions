@@ -173,9 +173,7 @@ the API while Winnow is loading or if it stops answering.
 
 - **Add a function:** append a `Function` in `decisions/functions.py` with its `needs`, a `description` written as "the caller
   ..." (the decision model reads it), and the code that runs. It fires and becomes an option for Winnow automatically.
-- **Real data:** put `customers.csv`, `location_notes.csv` (and optionally `disputes.csv`, `fleet.csv`,
-  `airport_aliases.csv`) in a folder, mount it at `/reference` (uncomment the volume in `docker-compose.yml`), set
-  `REFERENCE_DIR=/reference`. The samples are in `reference/`.
+- **Real data:** see "Use your own customers file" below. The samples are in `reference/`.
 - **Tail numbers and customer names:** set `EXTRACT_MODEL_URL` (and `EXTRACT_MODEL` for an OpenAI-compatible
   endpoint) to the model that pulls them out. On each caller line the same Winnow request asks "did the caller just say
   a complete tail number?" (when the line is about a tail, or answers the agent asking for one) and "did they name
@@ -439,6 +437,29 @@ Not done here: SigV4 signing with the EC2 instance role instead of an API key (t
 only); `bedrock-mantle` (us-east-1 only, `.../openai/v1` on `bedrock-mantle.us-east-1.api.aws`, base model ID
 `openai.gpt-6-luna`) should also work with the same settings but wasn't tried. None of this was run against Bedrock
 from here; it follows the AWS docs above.
+
+### Use your own customers file
+
+The margins file can have any name, spaces and parentheses included. It needs these column headers (any order;
+other columns are ignored): `CUSTOMER_NAME`, `CUSTOMER_NUMBER`, `ICAO`, `MIN_GPPG`, `CURRENT_GPPG`.
+`P12M_TOTAL_WFS_VOL` and `P12M_ADDRESSABLE_VOL` are optional. If a header is missing, the API stops at start with a
+message naming it and listing the headers it found. The other files (`location_notes.csv`, and optionally
+`disputes.csv`, `fleet.csv`, `airport_aliases.csv`) keep their names and sit in the same folder.
+
+**docker compose:** copy your file into `./reference` on the instance, uncomment the `./reference:/reference:ro` volume
+under `api` in `docker-compose.yml`, and set in `.env` (keep the quotes):
+
+```
+REFERENCE_DIR=/reference
+CUSTOMERS_FILE="New Worksheet (1AiE8Ye4TPO)_2026-10-09-1522.csv"
+```
+
+then `docker compose up -d`. `CUSTOMERS_FILE` can also be a full path inside the container.
+
+**ECR / ECS:** the `reference/` folder is baked into the private API image, so copy your file into `reference/` before
+`scripts/ecr_push.sh`, and set the same `CUSTOMERS_FILE="..."` in `.env` (or the environment) when you run
+`scripts/ecr_deploy.sh` or `scripts/ecs_deploy.sh`; the ECS script puts it in the task definition. Don't commit the
+real file: it stays in your working copy and the private image only.
 
 ## Notes: omitted for now
 

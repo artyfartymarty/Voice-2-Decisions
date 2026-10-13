@@ -25,6 +25,8 @@ export ECR_REGISTRY=${ECR_REGISTRY:?set ECR_REGISTRY (scripts/ecr_push.sh prints
 export MODEL_S3_URI=${MODEL_S3_URI:?set MODEL_S3_URI, e.g. s3://my-bucket/models/Winnow-12B-Q8_0.gguf}
 export MODEL_S3_OBJECT=${MODEL_S3_URI#s3://} MODEL_SHA256=b710efc4c0d048ee61eed92c5fef5ce323a4d17e7c51f9f0533cc72ae50818ea
 export CLUSTER=$PREFIX
+# The customers file baked into the image (reference/); its name can have spaces and parentheses.
+export CUSTOMERS_FILE_JSON=$(python3 -c 'import json, os; print(json.dumps(os.environ.get("CUSTOMERS_FILE", ""))[1:-1])')
 subnets=${SUBNET_IDS:?set SUBNET_IDS (comma-separated)}
 instance_type=${INSTANCE_TYPE:-g5.2xlarge}
 export ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -33,7 +35,7 @@ aws() { command aws --region "$AWS_REGION" "$@"; }
 render() {  # ecs/<file> with ${NAME} filled from the exported settings above (and SECRETS)
   python3 - "$1" <<'PY'
 import os, string, sys
-keys = "PREFIX AWS_REGION ACCOUNT ECR_REGISTRY IMAGE_TAG EXECUTION_ROLE_ARN SECRETS CLUSTER MODEL_S3_URI MODEL_S3_OBJECT MODEL_SHA256"
+keys = "CUSTOMERS_FILE_JSON PREFIX AWS_REGION ACCOUNT ECR_REGISTRY IMAGE_TAG EXECUTION_ROLE_ARN SECRETS CLUSTER MODEL_S3_URI MODEL_S3_OBJECT MODEL_SHA256"
 print(string.Template(open(sys.argv[1]).read()).safe_substitute({k: os.environ.get(k, "") for k in keys.split()}))
 PY
 }

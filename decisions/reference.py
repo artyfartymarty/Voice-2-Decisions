@@ -10,6 +10,7 @@ Finding customers, locations and tail numbers in speech lives in extract.py.
 """
 import csv
 import html
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,11 +121,23 @@ class Reference:
         return [s for s in self.sites if s.customer_number == customer_number]
 
 
+CUSTOMER_COLUMNS = ("CUSTOMER_NAME", "CUSTOMER_NUMBER", "ICAO", "MIN_GPPG", "CURRENT_GPPG")
+
+
 def load(directory: str | Path) -> Reference:
     directory = Path(directory)
     ref = Reference()
-    with open(directory / "customers.csv", newline="", encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
+    path = directory / (os.environ.get("CUSTOMERS_FILE") or "customers.csv")  # a name in the folder, or a full path
+    if not path.exists():
+        raise SystemExit(f"customers file not found: {path} (set CUSTOMERS_FILE and REFERENCE_DIR)")
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        reader.fieldnames = [h.strip() for h in reader.fieldnames or []]
+        missing = [c for c in CUSTOMER_COLUMNS if c not in reader.fieldnames]
+        if missing:
+            raise SystemExit(f"{path.name} is missing column(s) {', '.join(missing)}. Required: "
+                             f"{', '.join(CUSTOMER_COLUMNS)}. Found: {', '.join(reader.fieldnames)}")
+        for row in reader:
             ref.sites.append(CustomerSite(
                 customer_name=row["CUSTOMER_NAME"].strip(), customer_number=row["CUSTOMER_NUMBER"].strip(),
                 icao=row["ICAO"].strip().upper(), total_volume=float(row.get("P12M_TOTAL_WFS_VOL") or 0),

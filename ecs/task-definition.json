@@ -33,7 +33,8 @@
         {"name": "PORT", "value": "8000"},
         {"name": "WINNOW_URL", "value": "http://127.0.0.1:8091"},
         {"name": "EXTRACT_MODE", "value": "model"},
-        {"name": "CORS_ORIGIN", "value": "*"}
+        {"name": "CORS_ORIGIN", "value": "*"},
+        {"name": "CUSTOMERS_FILE", "value": "${CUSTOMERS_FILE_JSON}"}
       ],
       "secrets": ${SECRETS},
       "healthCheck": {
