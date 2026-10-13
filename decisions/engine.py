@@ -53,7 +53,10 @@ class Call:
             found = self.extractor.extract(sentence)
             if "customer" in found:
                 e = found["customer"]
-                changed.append(self._set("customer_number", e.value, e.label, e.confidence, e.evidence, speaker))
+                name = self._set("customer_number", e.value, e.label, e.confidence, e.evidence, speaker)
+                changed.append(name)
+                if name and e.confidence < 0.95:  # matched on a heard name, not the account number: read it back
+                    prompts.append(f"Confirm the account: heard \"{e.evidence}\", matched {e.label} ({e.value}).")
             if "location" in found:
                 e = found["location"]
                 changed.append(self._set("icao", e.value, e.label, e.confidence, e.evidence, speaker))

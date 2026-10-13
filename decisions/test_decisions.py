@@ -72,6 +72,13 @@ class Engine(unittest.TestCase):
         self.assertTrue(last["decision"]["ready"])
         self.assertEqual(last["decision"]["by"], "waiting")
 
+    def test_misheard_name_is_matched_and_read_back(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        out = call.feed("caller", "Hi, it's Priya from Blue Herring Jet Charter.")
+        self.assertEqual(call.variables["customer_number"]["value"], "318842")
+        self.assertIn("Confirm the account", out["prompts"][0])
+        self.assertEqual(call.feed("caller", "Account 318842.")["prompts"], [])  # the number itself needs no read-back
+
     def test_speculative_text_changes_nothing(self):
         call = Call("t", EXTRACTOR, RuleDecider())
         call.feed("caller", "account 204511 quote at Teterboro", final=False)
