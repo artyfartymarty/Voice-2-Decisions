@@ -206,6 +206,91 @@ the API while Winnow is loading or if it stops answering.
 | `winnow/serve.py` | starts winnow-server inside its container |
 | `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
+| `scripts/ecr_push.sh`, `scripts/ecr_deploy.sh`, `docker-compose.ecr.yml`, `winnow/Dockerfile` | private ECR images: build and push, then pull and run on the instance |
+| `decisions/ssm.py` | reads secrets from Parameter Store when the container starts |
+
+## Private images on ECR (keep the code from other teams)
+
+The code ships as Docker images in private ECR repositories, so the instance never holds a git clone, and secrets live
+in Parameter Store, not in the image, `.env` or git. Both images carry everything they run (the API's Python and
+reference data; Winnow's start wrapper). Only the model file is mounted.
+
+**1. Build and push** from anywhere with Docker and AWS credentials that can create and push to ECR (your laptop, or
+the GPU instance before you remove the source):
+
+```bash
+AWS_REGION=us-east-1 PULL_ROLE_ARNS=arn:aws:iam::<account>:role/<instance-role> scripts/ecr_push.sh
+```
+
+It creates `voice2decisions/api` and `voice2decisions/winnow` (private, scanned on push, KMS-encrypted), builds both
+images, tags them with the git commit and `latest`, pushes, and prints the four lines for the instance's `.env`.
+`PULL_ROLE_ARNS` is a comma-separated list of the roles your team uses. The script sets this repository policy, so only
+those roles and you can pull or push, whatever other IAM policies in the account allow:
+
+```json
+{"Version": "2012-10-17", "Statement": [
+  {"Sid": "TeamPull", "Effect": "Allow", "Principal": {"AWS": ["arn:aws:iam::<account>:role/<instance-role>", "<you>"]},
+   "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]},
+  {"Sid": "OnlyTheTeam", "Effect": "Deny", "Principal": "*",
+   "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability",
+              "ecr:PutImage", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart", "ecr:CompleteLayerUpload"],
+   "Condition": {"ArnNotEquals": {"aws:PrincipalArn": ["arn:aws:iam::<account>:role/<instance-role>", "<you>"]}}}]}
+```
+
+**2. Put the secrets in Parameter Store.** Every parameter under `/voice2decisions/` becomes the environment variable
+of the same name when the API container starts (`SSM_PARAMETER_PATH` to change the path). Use `SecureString` for
+anything secret. Non-secret settings can go there too, or stay in `.env`; a value set in `.env` wins.
+
+```bash
+aws ssm put-parameter --region us-east-1 --type SecureString --name /voice2decisions/EXTRACT_MODEL_API_KEY --value '<Bedrock API key>'
+aws ssm put-parameter --region us-east-1 --type String --name /voice2decisions/EXTRACT_MODEL_URL \
+  --value https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+```
+
+**3. Give the instance a role** (EC2 console: Actions, Security, Modify IAM role) with this policy. Replace the region,
+account and, if you encrypt the parameters with your own KMS key, the key ARN (`*` here covers the default
+`aws/ssm` key, limited to use through Parameter Store):
+
+```json
+{"Version": "2012-10-17", "Statement": [
+  {"Sid": "EcrLogin", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
+  {"Sid": "EcrPull", "Effect": "Allow",
+   "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+   "Resource": "arn:aws:ecr:us-east-1:<account>:repository/voice2decisions/*"},
+  {"Sid": "Secrets", "Effect": "Allow", "Action": ["ssm:GetParametersByPath", "ssm:GetParameter", "ssm:GetParameters"],
+   "Resource": ["arn:aws:ssm:us-east-1:<account>:parameter/voice2decisions", "arn:aws:ssm:us-east-1:<account>:parameter/voice2decisions/*"]},
+  {"Sid": "DecryptSecureStrings", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*",
+   "Condition": {"StringEquals": {"kms:ViaService": "ssm.us-east-1.amazonaws.com"}}}]}
+```
+
+The API container gets the role's credentials from the instance metadata service, which by default answers only one
+network hop away. Allow two so containers can reach it:
+
+```bash
+aws ec2 modify-instance-metadata-options --instance-id <id> --http-tokens required --http-put-response-hop-limit 2
+```
+
+**4. On the instance** you need only `docker-compose.ecr.yml`, `scripts/ecr_deploy.sh`, a `.env` and the model file:
+
+```bash
+mkdir -p ~/v2d/scripts ~/v2d/models/winnow/gguf && cd ~/v2d
+# copy in docker-compose.ecr.yml, scripts/ecr_deploy.sh and the model (Get the model onto the instance), then:
+cat > .env <<'ENV'
+ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com
+ECR_PREFIX=voice2decisions
+IMAGE_TAG=<printed by ecr_push.sh>
+AWS_REGION=us-east-1
+ENV
+scripts/ecr_deploy.sh
+```
+
+It logs in to ECR with the instance role, lists the parameter names it can read, pulls, starts and streams the demo
+quote call through the API. To ship a change, run `scripts/ecr_push.sh` again and `scripts/ecr_deploy.sh` with the new
+`IMAGE_TAG`. If the API won't start, `docker compose -f docker-compose.ecr.yml logs api` says which permission or
+parameter is missing.
+
+Private images keep the code away from anyone who can't pull them. Anyone who can pull the image, or who has a shell on
+the instance, can still read the Python inside it, so keep both limited to your team.
 
 ## GPT 6 Luna on Bedrock for tails and names
 
@@ -247,7 +332,8 @@ The first call to a third-party model may also need someone with AWS Marketplace
 Bedrock console (Model catalog → GPT-6 Luna).
 
 **3. Get a Bedrock API key.** Bedrock console → API keys → generate a key (a long-term one is simplest for a hackathon;
-give it an expiry). It goes in `.env` only; `.env` is git-ignored.
+give it an expiry). It goes in `.env` only; `.env` is git-ignored. When running from ECR, put it in Parameter Store
+instead (see Private images on ECR).
 
 **4. Set `.env`** and restart (`docker compose up -d`):
 

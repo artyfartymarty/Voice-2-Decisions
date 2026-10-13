@@ -338,5 +338,54 @@ class Api(unittest.TestCase):
         self.assertEqual(app.call("sim")[0].variables.keys(), call.variables.keys())
         self.assertEqual([s["line"]["text"] for s in steps if s["final"]], [l["text"] for l in call.transcript])
 
+
+class FakeSSM(BaseHTTPRequestHandler):
+    seen = []
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeSSM.seen.append((self.headers["X-Amz-Target"], self.headers["Authorization"], body))
+        page = {"Parameters": [{"Name": "/v2d/EXTRACT_MODEL_API_KEY", "Value": "secret-key"},
+                               {"Name": "/v2d/DECIDE_MIN_P", "Value": "0.7"}]}
+        if not body.get("NextToken"):
+            page["NextToken"] = "p2"
+        else:
+            page["Parameters"] = [{"Name": "/v2d/bedrock/region", "Value": "us-east-1"}]
+        data = json.dumps(page).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+
+class ParameterStore(unittest.TestCase):
+    def test_secrets_fill_missing_variables_only(self):
+        from . import ssm
+        server = HTTPServer(("127.0.0.1", 0), FakeSSM)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        env = {"SSM_PARAMETER_PATH": "/v2d/", "SSM_ENDPOINT": f"http://127.0.0.1:{server.server_port}",
+               "AWS_ACCESS_KEY_ID": "AKIDEXAMPLE", "AWS_SECRET_ACCESS_KEY": "x", "AWS_REGION": "us-east-1",
+               "EXTRACT_MODEL_API_KEY": "", "DECIDE_MIN_P": "0.5"}
+        try:
+            filled = ssm.load_into(env)
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(sorted(filled), ["BEDROCK_REGION", "EXTRACT_MODEL_API_KEY"])
+        self.assertEqual(env["EXTRACT_MODEL_API_KEY"], "secret-key")
+        self.assertEqual(env["DECIDE_MIN_P"], "0.5")  # set already: the environment wins
+        target, auth, body = FakeSSM.seen[0]
+        self.assertEqual(target, "AmazonSSM.GetParametersByPath")
+        self.assertTrue(auth.startswith("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/"))
+        self.assertEqual(body, {"Path": "/v2d", "Recursive": True, "WithDecryption": True})
+        self.assertEqual(FakeSSM.seen[1][2]["NextToken"], "p2")
+
+    def test_nothing_without_a_path(self):
+        from . import ssm
+        self.assertEqual(ssm.load_into({}), [])
+
 if __name__ == "__main__":
     unittest.main()

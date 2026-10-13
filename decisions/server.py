@@ -10,7 +10,8 @@
 
 Settings (environment): REFERENCE_DIR, WINNOW_URL, WINNOW_API_KEY, DECIDER=auto|rules, DECIDE_MIN_P, ROLE_MAP,
 EXTRACT_MODE, EXTRACT_MODEL_URL, EXTRACT_MODEL, EXTRACT_MODEL_API_KEY, EXTRACT_MODEL_REASONING, EXTRACT_MODEL_TIMEOUT,
-DECISION_WEBHOOK_URL (each new decision is POSTed there as JSON), CORS_ORIGIN (default *). The contract is in API.md.
+DECISION_WEBHOOK_URL (each new decision is POSTed there as JSON), CORS_ORIGIN (default *), SSM_PARAMETER_PATH
+(fill the rest from Parameter Store at start, see ssm.py). The contract is in API.md.
 """
 import json
 import logging
@@ -20,7 +21,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import decider as decider_mod
+from . import decider as decider_mod, ssm
 from .engine import Call, load_extractor
 from .events import EventReader
 from .model_extract import from_env as model_from_env
@@ -130,6 +131,7 @@ def make_handler(app: App):
 
 def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+    ssm.load_into(os.environ)  # secrets from Parameter Store when SSM_PARAMETER_PATH is set
     app = App()
     port = int(os.environ.get("PORT", "8000"))
     log.info("decisions listening on :%d (decider: %s)", port, app.decider.name)

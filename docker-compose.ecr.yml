@@ -1,0 +1,45 @@
+# Run from private ECR images: no source code on the instance, no builds, secrets from Parameter Store.
+#   scripts/ecr_deploy.sh      # logs in to ECR with the instance role, pulls, starts, checks
+# The instance needs only this file, scripts/ecr_deploy.sh, a .env and models/winnow (README: Private images on ECR).
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+services:
+  winnow:
+    <<: *gpu
+    image: ${ECR_REGISTRY:?set ECR_REGISTRY in .env}/${ECR_PREFIX:-voice2decisions}/winnow:${IMAGE_TAG:-latest}
+    environment:
+      WINNOW_CONTEXT: ${WINNOW_CONTEXT:-4096}
+    volumes:
+      - ./models/winnow:/models:ro
+    restart: unless-stopped
+
+  api:
+    image: ${ECR_REGISTRY:?set ECR_REGISTRY in .env}/${ECR_PREFIX:-voice2decisions}/api:${IMAGE_TAG:-latest}
+    environment:
+      # Secrets (EXTRACT_MODEL_API_KEY, ...) are read from here at start with the instance role; keep them out of .env.
+      SSM_PARAMETER_PATH: ${SSM_PARAMETER_PATH:-/voice2decisions/}
+      AWS_REGION: ${AWS_REGION:-}
+      WINNOW_URL: http://winnow:8091
+      DECIDE_MIN_P: ${DECIDE_MIN_P:-0.5}
+      ROLE_MAP: ${ROLE_MAP:-USER:caller,ASSISTANT:agent}
+      DECISION_WEBHOOK_URL: ${DECISION_WEBHOOK_URL:-}
+      CORS_ORIGIN: ${CORS_ORIGIN-*}
+      REFERENCE_DIR: ${REFERENCE_DIR:-}
+      EXTRACT_MODE: ${EXTRACT_MODE:-model}
+      EXTRACT_MODEL_URL: ${EXTRACT_MODEL_URL:-}
+      EXTRACT_MODEL: ${EXTRACT_MODEL:-}
+      EXTRACT_MODEL_API_KEY: ""
+      EXTRACT_MODEL_REASONING: ${EXTRACT_MODEL_REASONING:-}
+      EXTRACT_MODEL_TIMEOUT: ${EXTRACT_MODEL_TIMEOUT:-3}
+    ports:
+      - "${PORT:-8000}:8000"
+    depends_on:
+      - winnow
+    restart: unless-stopped
