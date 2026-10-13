@@ -2,6 +2,10 @@
 
 Nova Sonic turns the call's speech into text. This service takes that text and does the rest:
 
+> **Speech-to-text is no longer in this repo.** It moved to Amazon Nova Sonic, which runs on the UI side. The Nemotron
+> ASR model, its container, its download and its setup steps are removed. The old Nemotron setup lives in the separate
+> Voice-Nemotron-setup repo.
+
 1. **Variables.** Each final line is checked for the customer, the location and the aircraft tail number. Winnow-12B
    decides whether the caller just said a tail number or their company name; if so, GPT 6 Luna pulls it out. Account
    numbers and locations (ICAO, IATA, FBO or airport name) are matched against the reference lists. Only values that
@@ -271,5 +275,5 @@ from here; it follows the AWS docs above.
   its tests stay.)
 - **Locations** still come from list matching (ICAO / IATA / FBO / airport names), with Winnow settling fuzzy matches.
 - **Removed from this repo:** the Django web UI and browser console, the speech pipeline (Nemotron ASR, diarization,
-  WAV streaming), the old sentiment scorer and use-case tools, their tests and audio fixtures. They are in the git
+  WAV streaming; now Nova Sonic, and the old setup is in the Voice-Nemotron-setup repo), the old sentiment scorer and use-case tools, their tests and audio fixtures. They are in the git
   history before this change if you need them back.

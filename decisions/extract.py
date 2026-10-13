@@ -306,13 +306,6 @@ class Extractor:
                 found[kind] = e
         return found
 
-    def boost_words(self) -> list[str]:
-        """Phrases to bias ASR toward (NeMo-Speech.cpp speech_contexts / word boost): customers, FBOs, airports, codes."""
-        phrases = {core.title() for _, core in self.customers.values()}
-        phrases |= {name for _, name in self.place_names}
-        phrases |= self.icaos | set(self.iata)
-        return sorted(phrases)
-
 
 @lru_cache(maxsize=2)
 def _extractor(directory: str, tail_min: float) -> Extractor:
