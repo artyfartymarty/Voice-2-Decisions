@@ -141,7 +141,19 @@ class Call:
         country = extract.registration_country(tail or "")
         if not country:
             return []
-        fleet = self.extractor.fleet.get(self.variables.get("customer_number", {}).get("value") or "", set())
+        customer = self.variables.get("customer_number", {}).get("value")
+        owner = next((n for n, tails in self.extractor.fleet.items() if tail in tails), None)
+        switched = bool(owner) and owner != customer
+        if switched:
+            # The tail is on file for a customer: that identifies the caller's account, over a name that was heard.
+            name = self.extractor.customers[owner][0]
+            if customer:
+                self._prompt(f"Tail {tail} is on file for {name} ({owner}), not "
+                             f"{self.variables['customer_number']['label']}. Read the account back to the caller.", prompts)
+            self._set("customer_number", owner, name, 1.0, tail, speaker)
+            self.variables["customer_number"]["settled_by"] = "tail"
+            customer = owner
+        fleet = self.extractor.fleet.get(customer or "", set())
         heard, how, p = tail, "", 0.8
         if fleet and tail not in fleet:
             off = {t: extract.edits(t, tail) for t in fleet}  # one or two letters or digits misheard or swapped
@@ -154,12 +166,12 @@ class Call:
             country = extract.registration_country(tail) or country
         self.tail_slot.update(value=tail, partial="", partial_by="", pending=False)
         if not self._set("tail_number", tail, country, p, text, speaker):
-            return []
+            return ["customer_number"] if switched else []
         if how:
             self.variables["tail_number"]["settled_by"] = how
         said = f" (heard {heard})" if heard != tail else ""
         self._prompt(f"Read the tail number back to the caller: {tail}{said}.", prompts)
-        return ["tail_number"]
+        return ["tail_number"] + (["customer_number"] if switched else [])
 
     def _settle(self, picks: dict, speaker: str) -> list[str]:
         """Apply Winnow's answers to this line's unsure matches (a pick of "none" keeps the fuzzy match)."""

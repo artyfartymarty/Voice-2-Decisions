@@ -196,6 +196,10 @@ the API while Winnow is loading or if it stops answering.
   caller; "none" (or a pick below `DECIDE_MIN_P`) asks for the account number instead. A tail that isn't on the
   customer's fleet works the same way, with the fleet's tails one or two characters off ("N47JA": N47AJ, N74AJ).
   Winnow gets only text: Nova Sonic's transcript, never the audio.
+- **A tail on file identifies the customer.** If the tail is on a customer's fleet (`fleet.csv`), that customer is
+  used, over a name that was heard; when they disagree ("Arrow" heard, tail on Aero Vista's fleet) the agent is told
+  to read the account back. An account number said as digits, written or spoken ("two oh four five one one"), fills
+  the customer directly.
 
 | File | What it does |
 |---|---|

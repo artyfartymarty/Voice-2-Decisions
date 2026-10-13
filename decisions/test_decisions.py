@@ -298,6 +298,9 @@ class Winnow(unittest.TestCase):
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
         call.feed("caller", "Account 204511.")
         self.assertEqual(call.variables["customer_number"]["value"], "204511")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
+        call.feed("caller", "My customer number is two oh four five one one.")  # spoken digits too
+        self.assertEqual(call.variables["customer_number"]["value"], "204511")
         self.assertEqual(model.asked, [])
 
         # A name that isn't on file is not committed; the agent asks for the account number.
@@ -360,6 +363,20 @@ class Winnow(unittest.TestCase):
         self.assertEqual(set(which["criteria"]), {"N47AJ", "N74AJ", "none"})
         self.assertEqual(call.variables["tail_number"]["value"], "N47AJ")
         self.assertIn("N47AJ (heard N47JA)", " ".join(out["prompts"]))
+
+    def test_tail_on_file_identifies_the_customer(self):
+        # The name was heard as Arrow, but the tail is on Aero Vista's fleet: the tail wins and the agent reads it back.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arrow", tail_number="N9AV"))
+        call.feed("caller", "Hi, this is Arrow.")
+        self.assertEqual(call.variables["customer_number"]["value"], "611377")
+        out = call.feed("caller", "The tail is November niner alpha victor.")
+        self.assertEqual(call.variables["customer_number"]["value"], "611590")
+        self.assertEqual(call.variables["customer_number"]["settled_by"], "tail")
+        self.assertIn("on file for AERO VISTA, INC (611590), not ARROW JET CHARTER", " ".join(out["prompts"]))
+        # A tail alone, with no name yet, fills the customer too.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(tail_number="N88NW"))
+        call.feed("caller", "Tail number November eight eight November whiskey.")
+        self.assertEqual(call.variables["customer_number"]["value"], "204511")
 
     def test_unreachable_winnow_falls_back_to_rules(self):
         call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))
