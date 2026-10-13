@@ -1,0 +1,9 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Sid": "Secrets", "Effect": "Allow", "Action": ["ssm:GetParameters", "ssm:GetParameter"],
+     "Resource": "arn:aws:ssm:${AWS_REGION}:${ACCOUNT}:parameter/${PREFIX}/*"},
+    {"Sid": "DecryptSecureStrings", "Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*",
+     "Condition": {"StringEquals": {"kms:ViaService": "ssm.${AWS_REGION}.amazonaws.com"}}}
+  ]
+}

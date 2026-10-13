@@ -1,0 +1,47 @@
+{
+  "family": "${PREFIX}",
+  "requiresCompatibilities": ["EC2"],
+  "networkMode": "host",
+  "executionRoleArn": "${EXECUTION_ROLE_ARN}",
+  "volumes": [
+    {"name": "models", "host": {"sourcePath": "/opt/voice2decisions/models/winnow"}}
+  ],
+  "containerDefinitions": [
+    {
+      "name": "winnow",
+      "image": "${ECR_REGISTRY}/${PREFIX}/winnow:${IMAGE_TAG}",
+      "essential": true,
+      "resourceRequirements": [{"type": "GPU", "value": "1"}],
+      "memoryReservation": 16384,
+      "environment": [{"name": "WINNOW_CONTEXT", "value": "4096"}],
+      "mountPoints": [{"sourceVolume": "models", "containerPath": "/models", "readOnly": true}],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2)\""],
+        "interval": 30, "timeout": 5, "retries": 3, "startPeriod": 300
+      },
+      "logConfiguration": {"logDriver": "awslogs", "options": {
+        "awslogs-group": "/ecs/${PREFIX}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "winnow"}}
+    },
+    {
+      "name": "api",
+      "image": "${ECR_REGISTRY}/${PREFIX}/api:${IMAGE_TAG}",
+      "essential": true,
+      "memoryReservation": 512,
+      "portMappings": [{"containerPort": 8000, "hostPort": 8000, "protocol": "tcp"}],
+      "dependsOn": [{"containerName": "winnow", "condition": "START"}],
+      "environment": [
+        {"name": "PORT", "value": "8000"},
+        {"name": "WINNOW_URL", "value": "http://127.0.0.1:8091"},
+        {"name": "EXTRACT_MODE", "value": "model"},
+        {"name": "CORS_ORIGIN", "value": "*"}
+      ],
+      "secrets": ${SECRETS},
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)\""],
+        "interval": 15, "timeout": 3, "retries": 3, "startPeriod": 10
+      },
+      "logConfiguration": {"logDriver": "awslogs", "options": {
+        "awslogs-group": "/ecs/${PREFIX}", "awslogs-region": "${AWS_REGION}", "awslogs-stream-prefix": "api"}}
+    }
+  ]
+}

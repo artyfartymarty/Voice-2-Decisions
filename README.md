@@ -208,6 +208,7 @@ the API while Winnow is loading or if it stops answering.
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
 | `scripts/ecr_push.sh`, `scripts/ecr_deploy.sh`, `docker-compose.ecr.yml`, `winnow/Dockerfile` | private ECR images: build and push, then pull and run on the instance |
 | `decisions/ssm.py` | reads secrets from Parameter Store when the container starts |
+| `ecs/`, `scripts/ecs_deploy.sh` | the 24/7 ECS service: task definition, instance boot script, IAM, deploy |
 
 ## Private images on ECR (keep the code from other teams)
 
@@ -291,6 +292,67 @@ parameter is missing.
 
 Private images keep the code away from anyone who can't pull them. Anyone who can pull the image, or who has a shell on
 the instance, can still read the Python inside it, so keep both limited to your team.
+
+## Run it 24/7 on ECS
+
+For the hackathon, one EC2 instance with docker compose (above) is quickest. For an always-on service, run it as an ECS
+service with one always-running task, so ECS restarts it if it fails and replaces the instance if that fails.
+
+**How it's laid out.** Winnow-12B needs a GPU and Fargate has none, so it runs on the ECS EC2 launch type: one
+`g5.2xlarge` from the ECS GPU-optimized AMI in an Auto Scaling group, attached to the cluster as a capacity provider.
+The API runs in the **same task** as Winnow, which is the simpler option: one task to deploy and watch, host
+networking so the API reaches Winnow on `127.0.0.1:8091`, and no service discovery or load balancer. The task asks for
+one GPU, the service keeps one copy running, and both containers have health checks. Images come from the private ECR
+repositories. The 12.7 GB model is not in the image: the instance copies it from S3 to its own disk on first boot,
+checks its SHA-256, and only then joins the cluster. Secrets go in the task definition's `secrets`, one per Parameter
+Store parameter under `/voice2decisions/`, so ECS injects them and `ssm.py` isn't involved.
+
+| File | What it is |
+|---|---|
+| `ecs/task-definition.json` | the task: `winnow` (1 GPU, model volume) and `api` (port 8000, secrets), health checks, CloudWatch logs |
+| `ecs/user-data.sh` | instance boot: copy and check the model, then join the cluster with GPU support on |
+| `ecs/execution-role-policy.json` | extra permissions for the task execution role |
+| `ecs/instance-role-policy.json` | extra permissions for the instance role |
+| `scripts/ecs_deploy.sh` | creates or updates all of it |
+
+**Steps**, from a machine with AWS credentials that can manage IAM, EC2, Auto Scaling and ECS:
+
+```bash
+scripts/ecr_push.sh                                            # images in ECR (Private images on ECR)
+aws s3 cp Winnow-12B-Q8_0.gguf s3://<bucket>/models/           # the model, once
+aws ssm put-parameter --type SecureString --name /voice2decisions/EXTRACT_MODEL_API_KEY --value '<key>'   # secrets
+
+AWS_REGION=us-east-1 ECR_REGISTRY=<account>.dkr.ecr.us-east-1.amazonaws.com IMAGE_TAG=<tag> \
+MODEL_S3_URI=s3://<bucket>/models/Winnow-12B-Q8_0.gguf SUBNET_IDS=subnet-aaa,subnet-bbb ALLOWED_CIDR=<UI's range> \
+scripts/ecs_deploy.sh
+```
+
+The script creates the roles, cluster, security group (port 8000 open only to `ALLOWED_CIDR`), launch template, Auto
+Scaling group, capacity provider, task definition and service, and adds the two roles to the ECR repository policy.
+Running it again with a new `IMAGE_TAG` registers a new task definition and rolls the service onto it. One GPU
+instance holds one task, so a deploy stops the old task before starting the new one; expect a few minutes of downtime.
+The first start waits for the instance to boot and copy the model. Follow it with
+`aws logs tail /ecs/voice2decisions --follow`.
+
+**IAM roles it creates:**
+
+- `voice2decisions-ecs-execution`, assumed by `ecs-tasks.amazonaws.com`. It has `AmazonECSTaskExecutionRolePolicy`
+  (ECR pull, CloudWatch logs) plus `ecs/execution-role-policy.json`: `ssm:GetParameters` on
+  `parameter/voice2decisions/*` and `kms:Decrypt` through Parameter Store, for the `secrets`.
+- `voice2decisions-ecs-instance` and its instance profile, assumed by `ec2.amazonaws.com`. It has
+  `AmazonEC2ContainerServiceforEC2Role` (join the cluster), `AmazonSSMManagedInstanceCore` (a shell through Session
+  Manager, no SSH key) and `ecs/instance-role-policy.json`: `s3:GetObject` on the model file only.
+- The task itself needs no role. GPT 6 Luna is called with the Bedrock API key from Parameter Store.
+
+**Check before relying on it:** the Winnow build needs NVIDIA driver 580 or newer. The instance logs its driver
+version at boot (`/var/log/cloud-init-output.log`, or Session Manager and `nvidia-smi`). If the ECS GPU AMI's driver is
+older, the `winnow` container will fail its health check and ECS will keep restarting it.
+
+**Rough always-on cost** (us-east-1 on-demand prices as I know them; check the pricing page): `g5.2xlarge` about
+$1.21 an hour, roughly $880 a month running 24/7, plus about $8 a month for the 100 GB disk and a little for logs. ECS
+itself adds nothing on the EC2 launch type. A `g6.2xlarge` (L4, 24 GB) is about $0.98 an hour, roughly $715 a month,
+with `INSTANCE_TYPE=g6.2xlarge` and `CUDA_ARCH=89` for the image build. A one-year Savings Plan takes roughly a third
+off either.
 
 ## GPT 6 Luna on Bedrock for tails and names
 
