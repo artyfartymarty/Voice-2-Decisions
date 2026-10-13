@@ -47,7 +47,6 @@ class Call:
         self.decision: dict | None = None
         self.prompts: list[str] = []
         self.started = time.time()
-        self._ambiguous: set[str] = set()  # the customer came from a name with look-alikes: these are the options
         self._unsure: dict[str, dict] = {}  # this line's fuzzy matches, for Winnow to settle: var -> {heard, options}
 
     # --- variables ---
@@ -109,74 +108,30 @@ class Call:
         """Winnow picks which of the close matches the caller meant. None: Winnow unavailable (or the rules decider)."""
         return self.decider.choose(what, heard, text, self.transcript, options) if options else None
 
-    def _fits(self, numbers) -> list[str]:
-        """The customers among `numbers` that agree with the tail and airport heard so far in the call."""
-        tail = self.variables.get("tail_number", {}).get("value")
-        icao = self.variables.get("icao", {}).get("value")
-        return [n for n in numbers
-                if (tail is None or tail in self.extractor.fleet.get(n, ()))
-                and (icao is None or icao in {site.icao for site in self.extractor.ref.sites_for(n)})]
-
     def _model_customer(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
         """Winnow says the caller named their company: the model pulls the name out, then it must match customers.csv.
-
-        A transcript can be wrong in two ways. The name isn't on file ("Arigo"): the customers that look or sound
-        closest are the options. Or it lands on another real customer ("Arrow" when they said "Aero"): an exact match
-        on a name with look-alikes (Extractor.confusable) is treated as ambiguous too. Ambiguous options are narrowed by
-        the tail and airport already heard; if more than one is left, Winnow chooses with the call so far. Either way
-        the agent reads the account back, and a later tail or airport can still switch it (_recheck_customer)."""
+        With no exact match, Winnow chooses among the names that look or sound closest ("Arigo": Arrigo, Arrow, Aero)."""
         said = self.model.extract("customer", text, self._recent())
         if not said:
             return []
-        exact = self.extractor.exact_customer(said)
-        if exact is not None:
-            options = [exact] + sorted(self.extractor.confusable[exact])
-        else:
-            options = [n for n, _, _ in self.extractor.closest_customers(said)]
-        number, p, how = exact, 1.0, ""
-        if len(options) > 1 or exact is None:
-            fit = self._fits(options)
-            if len(fit) == 1 and len(options) > 1:
-                number, p, how = fit[0], 1.0, "context"
+        number, p, how = self.extractor.exact_customer(said), 1.0, ""
+        if number is None:
+            close = self.extractor.closest_customers(said)
+            pick = self._choose("customer", said, text, {n: name for n, name, _ in close})
+            if pick and pick["value"] and pick["p"] >= self.min_p:
+                number, p, how = pick["value"], pick["p"], "winnow"
+            elif pick is None and (e := self.extractor.customer(said)):  # no Winnow: the plain fuzzy match
+                number, p = e.value, e.confidence
             else:
-                pick = self._choose("customer", said, text, {n: self.extractor.describe(n) for n in (fit or options)})
-                if pick and pick["value"] and pick["p"] >= self.min_p:
-                    number, p, how = pick["value"], pick["p"], "winnow"
-                elif pick is None and exact is None and (e := self.extractor.customer(said)):  # no Winnow: fuzzy match
-                    number, p = e.value, e.confidence
-                elif pick is not None or exact is None:
-                    self._prompt(f"Caller said they're with \"{said}\", which doesn't match a customer on file. "
-                                 f"Ask for the account number.", prompts)
-                    return []
-        self._ambiguous = set(options) if len(options) > 1 else set()
+                self._prompt(f"Caller said they're with \"{said}\", which doesn't match a customer on file. "
+                             f"Ask for the account number.", prompts)
+                return []
         name = self.extractor.customers[number][0]
         if not self._set("customer_number", number, name, p, said, speaker):
             return []
         if how:
             self.variables["customer_number"]["settled_by"] = how
-        alike = [self.extractor.customers[n][0] for n in sorted(self._ambiguous - {number})]
-        warn = (f" It sounds like {', '.join(alike)}; if the caller doesn't confirm, ask for the account number."
-                if alike else "")
-        self._prompt(f"Confirm the account: caller said \"{said}\", matched {name} ({number}).{warn}", prompts)
-        return ["customer_number"]
-
-    def _recheck_customer(self, speaker: str, prompts: list[str]) -> list[str]:
-        """The customer came from a name with look-alikes, and a tail or airport now fits exactly one other of them:
-        switch to that one and have the agent confirm."""
-        current = self.variables.get("customer_number", {}).get("value")
-        if not self._ambiguous or current is None:
-            return []
-        fit = self._fits(self._ambiguous)
-        if current in fit or len(fit) != 1:
-            return []
-        new, old = fit[0], self.extractor.customers[current][0]
-        heard = self.variables["customer_number"]["heard"]
-        self._set("customer_number", new, self.extractor.customers[new][0], 1.0, heard, speaker)
-        self.variables["customer_number"]["settled_by"] = "context"
-        why = " and ".join(f"{k} {self.variables[v]['value']}" for k, v in (("tail", "tail_number"), ("airport", "icao"))
-                           if v in self.variables)
-        self._prompt(f"Account changed: the caller's {why} fits {self.extractor.customers[new][0]} ({new}), not {old}. "
-                     f"Confirm the account with the caller.", prompts)
+        self._prompt(f"Confirm the account: caller said \"{said}\", matched {name} ({number}).", prompts)
         return ["customer_number"]
 
     def _normalize_tail(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
@@ -188,8 +143,7 @@ class Call:
             return []
         fleet = self.extractor.fleet.get(self.variables.get("customer_number", {}).get("value") or "", set())
         heard, how, p = tail, "", 0.8
-        lookalike_fleet = any(tail in self.extractor.fleet.get(n, ()) for n in self._ambiguous)  # see _recheck_customer
-        if fleet and tail not in fleet and not lookalike_fleet:
+        if fleet and tail not in fleet:
             off = {t: extract.edits(t, tail) for t in fleet}  # one or two letters or digits misheard or swapped
             close = [t for t in sorted(off, key=off.get)[:4] if off[t] <= 2]
             pick = self._choose("aircraft tail number", tail, text, {t: t for t in close})
@@ -270,7 +224,6 @@ class Call:
         self._unsure, self._name_hint = {}, False
         changed, prompts = self._extract(speaker, line["text"])
         self.prompts += prompts
-        changed += [v for v in self._recheck_customer(speaker, prompts) if v not in changed]
         fired = self._autocall()
         decision = None
         if speaker in self.decide_on:
@@ -293,7 +246,6 @@ class Call:
                 settled += self._model_customer(line["text"], speaker, prompts)
             if ask_tail and said.get("tail_said", 0.0) >= self.min_p:
                 settled += self._normalize_tail(line["text"], speaker, prompts)
-            settled += self._recheck_customer(speaker, prompts)
             if settled:
                 changed += [v for v in settled if v not in changed]
                 fired += self._autocall()

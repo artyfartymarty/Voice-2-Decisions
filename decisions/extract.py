@@ -229,15 +229,6 @@ class Extractor:
             firsts.setdefault(squash(core.split()[0]) if core.split() else "", []).append(number)
         generic = {"aviation", "air", "jet", "flight", "aero", "global", "executive", "charter"}
         self.short_names = {w: nums[0] for w, nums in firsts.items() if w and len(nums) == 1 and w not in generic}
-        # Customers a speech-to-text slip could turn into each other ("Aero" heard as "Arrow"): an exact match on one
-        # of these is still ambiguous, so Winnow and the rest of the call decide between them.
-        self.confusable: dict[str, set[str]] = {n: set() for n in self.customers}
-        keys = {n: self._name_key(core) for n, (_, core) in self.customers.items()}
-        for a in self.customers:
-            for b in self.customers:
-                if a < b and keys[a] and keys[b] and sound_alike(keys[a], keys[b]) >= 0.7:
-                    self.confusable[a].add(b)
-                    self.confusable[b].add(a)
         self.place_names = []  # (icao, alias)
         for icao, loc in ref.locations.items():
             if loc.fbo:
@@ -269,19 +260,6 @@ class Extractor:
                     if score >= 0.82 and (best is None or score > best.confidence):
                         best = Entity("customer", number, name, round(score, 3), window)
         return best
-
-    @staticmethod
-    def _name_key(core: str) -> str:
-        """The distinctive word of a customer name: its first word that isn't generic ("ARROW JET CHARTER" -> arrow)."""
-        parts = [w for w in core.split() if w.lower() not in GENERIC_WORDS] or core.split()
-        return squash(parts[0]) if parts else ""
-
-    def describe(self, number: str) -> str:
-        """A customer as Winnow sees it among look-alikes: name, where they fuel, their tails."""
-        name = self.customers[number][0]
-        sites = sorted({s.icao for s in self.ref.sites_for(number)})
-        tails = sorted(self.fleet.get(number, ()))
-        return f"{name}" + (f"; fuels at {', '.join(sites)}" if sites else "") + (f"; tails {', '.join(tails)}" if tails else "")
 
     def exact_customer(self, said: str) -> str | None:
         """The customer `said` names outright: the full name, or a first word only one customer has ("Arrow")."""

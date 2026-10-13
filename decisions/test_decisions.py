@@ -340,44 +340,13 @@ class Winnow(unittest.TestCase):
         self.assertNotIn("customer_number", call.variables)
         self.assertIn("Ask for the account number", out["prompts"][-1])
 
-        # An exact name with no look-alikes doesn't need Winnow.
-        before = len(FakeWinnow.seen)
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Northwind Aviation"))
-        call.feed("caller", "This is Northwind Aviation.")
-        self.assertEqual(call.variables["customer_number"]["value"], "204511")
-        self.assertFalse(any("which" in b["questions"] for b in FakeWinnow.seen[before:]))
-
-    def test_transcript_lands_on_the_wrong_real_customer(self):
-        # The caller said "Aero", Nova Sonic wrote "Arrow", and Arrow Jet Charter is a real customer. Arrow and Aero
-        # sound alike, so the exact match is still ambiguous: Winnow chooses among them, with where each one fuels.
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arrow"))
-        out = call.feed("caller", "Hi, this is Arrow.")  # Winnow (the fake) picks the first option: Arrow
-        which = next(b for b in reversed(FakeWinnow.seen) if "which" in b["questions"])["questions"]["which"]
-        self.assertEqual(set(which["criteria"]), {"611377", "611590", "611204", "none"})
-        self.assertIn("fuels at KVNY", which["criteria"]["611590"])
-        self.assertEqual(call.variables["customer_number"]["value"], "611377")
-        self.assertIn("if the caller doesn't confirm, ask for the account number", out["prompts"][-1])
-        # Then the airport: only Aero Vista fuels at Van Nuys, so the account switches and the agent confirms it.
-        out = call.feed("caller", "We're flying into Van Nuys tomorrow, what's your price?")
-        self.assertEqual(call.variables["customer_number"]["value"], "611590")
-        self.assertEqual(call.variables["customer_number"]["settled_by"], "context")
-        self.assertIn("fits AERO VISTA, INC (611590), not ARROW JET CHARTER", " ".join(out["prompts"]))
-        self.assertEqual(out["decision"]["result"]["customer_number"], "611590")  # the quote is for Aero Vista
-
-        # The tail does the same: N9AV is on Aero Vista's fleet, not Arrow's.
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arrow", tail_number="N9AV"))
-        call.feed("caller", "Hi, this is Arrow.")
-        self.assertEqual(call.variables["customer_number"]["value"], "611377")
-        call.feed("caller", "The tail is November niner alpha victor.")
-        self.assertEqual(call.variables["customer_number"]["value"], "611590")
-        self.assertEqual(call.variables["tail_number"]["value"], "N9AV")
-
-        # Airport heard first: only one look-alike fits it, so it's chosen without asking Winnow.
-        before = len(FakeWinnow.seen)
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arrow"))
-        call.feed("caller", "This is Arrow, we're at Van Nuys.")
-        self.assertEqual(call.variables["customer_number"]["value"], "611590")
-        self.assertFalse(any("which" in b["questions"] for b in FakeWinnow.seen[before:]))
+        # An exact name, or a first word only one customer has, doesn't need Winnow.
+        for said, number in (("Arrow", "611377"), ("Arrigo Aviation", "611204"), ("Aero Vista", "611590")):
+            before = len(FakeWinnow.seen)
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer=said))
+            call.feed("caller", f"This is {said}.")
+            self.assertEqual(call.variables["customer_number"]["value"], number, said)
+            self.assertFalse(any("which" in b["questions"] for b in FakeWinnow.seen[before:]), said)
 
     def test_tail_not_on_the_fleet_winnow_picks_the_close_one(self):
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(tail_number="N47JA"))
