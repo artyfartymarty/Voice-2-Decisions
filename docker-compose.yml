@@ -1,10 +1,21 @@
 # CPU-safe base. On a GPU machine add the GPU overlay:
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 services:
+  # Speech service: NeMo-Speech.cpp with English Nemotron ASR Q8 + Nemotron diarization (used when ASR_BACKEND=nemo_speech)
+  asr:
+    build: ./asr
+    image: voice2decisions-asr:latest
+    volumes:
+      - asr-models:/models   # pinned GGUFs, downloaded on first start (~0.8 GB)
+    restart: unless-stopped
+
   web:
     build: .
     image: voice2decisions:latest
     env_file: .env
+    depends_on:
+      asr:
+        condition: service_healthy
     ports:
       - "${PORT:-8000}:8000"
     volumes:
@@ -29,3 +40,4 @@ services:
 
 volumes:
   v2d-data:
+  asr-models:

@@ -135,6 +135,100 @@ class NemotronASR(ASRBackend):
         return info
 
 
+class NemoSpeechASR(ASRBackend):
+    """Client for the speech service (NVIDIA NeMo-Speech.cpp `nemo-speech serve`, see asr/Dockerfile).
+
+    English Nemotron Q8 GGUF, ~4x faster than the Transformers path on the same GPU, with word boost
+    (`speech_contexts`) from the reference data. With diarize=True the service also tags each word with a speaker
+    (Nemotron-3-Diarization), so a mono recording gets speakers in the same request.
+    """
+
+    name = "nemo_speech"
+    supports_speakers = True
+
+    def __init__(self, url: str, api_key: str = "", boost: float = 4.0, timeout: float = 300.0, pause_s: float = 0.6):
+        self.url = url.rstrip("/")
+        self.api_key, self.boost, self.timeout, self.pause_s = api_key, boost, timeout, pause_s
+
+    def _request(self, samples: np.ndarray, diarize: bool) -> dict:
+        import io
+        import json
+        import urllib.request
+        import uuid
+
+        import soundfile as sf
+
+        buf = io.BytesIO()
+        sf.write(buf, samples, TARGET_SR, format="WAV", subtype="PCM_16")
+        fields = {"response_format": "verbose_json", "diarization": "true" if diarize else "false"}
+        phrases = _boost_phrases()
+        if phrases and self.boost:
+            fields["speech_contexts"] = json.dumps([{"phrases": phrases, "boost": self.boost}])
+        boundary = uuid.uuid4().hex
+        body = b"".join(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+                        for k, v in fields.items())
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n"
+                 f"Content-Type: audio/wav\r\n\r\n").encode() + buf.getvalue() + f"\r\n--{boundary}--\r\n".encode()
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(f"{self.url}/v1/audio/transcriptions", data=body, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read())
+
+    def _segments(self, words: list[dict], by_speaker: bool) -> list[tuple[Segment, str]]:
+        """Group words into segments at pauses (and, with speakers, at every change of speaker)."""
+        out: list[tuple[Segment, str]] = []
+        for w in words:
+            spk = f"speaker {w['speaker']}" if by_speaker and w.get("speaker") is not None else ""
+            text = w.get("word", "").strip()
+            if not text:
+                continue
+            if out and out[-1][1] == spk and float(w["start"]) - out[-1][0].end < self.pause_s:
+                seg = out[-1][0]
+                seg.end, seg.text = float(w["end"]), f"{seg.text} {text}"
+            else:
+                out.append((Segment(float(w["start"]), float(w["end"]), text), spk))
+        return out
+
+    def transcribe(self, samples: np.ndarray) -> Transcript:
+        t = Transcript(duration=len(samples) / TARGET_SR, language="en-US")
+        if len(samples) < TARGET_SR // 10:
+            return t
+        data = self._request(samples, diarize=False)
+        if data.get("words"):
+            t.segments = [seg for seg, _ in self._segments(data["words"], by_speaker=False)]
+        elif data.get("text"):
+            t.segments = [Segment(0.0, t.duration, data["text"].strip())]
+        return t
+
+    def transcribe_with_speakers(self, samples: np.ndarray) -> list[tuple[Segment, str]]:
+        """Mono recording -> [(segment, "speaker N")], one request for ASR + diarization."""
+        if len(samples) < TARGET_SR // 10:
+            return []
+        return self._segments(self._request(samples, diarize=True).get("words", []), by_speaker=True)
+
+    def info(self):
+        info = {"backend": self.name, "url": self.url, "model": "nemotron-speech-streaming-en-0.6b Q8 (NeMo-Speech.cpp)"}
+        try:
+            import json
+            import urllib.request
+
+            with urllib.request.urlopen(f"{self.url}/ready", timeout=2) as r:
+                info["ready"] = json.loads(r.read())
+        except Exception as exc:
+            info["ready"] = {"ready": False, "error": str(exc)}
+        return info
+
+
+def _boost_phrases() -> list[str]:
+    try:
+        from . import extract
+        return extract.get().boost_words()
+    except Exception:
+        return []
+
+
 _backend: ASRBackend | None = None
 _backend_lock = threading.Lock()
 
@@ -147,8 +241,10 @@ def get_backend() -> ASRBackend:
                 _backend = FakeASR()
             elif settings.ASR_BACKEND == "nemotron":
                 _backend = NemotronASR(settings.ASR_MODEL_ID, settings.ASR_LANGUAGE, settings.ASR_DEVICE)
+            elif settings.ASR_BACKEND == "nemo_speech":
+                _backend = NemoSpeechASR(settings.NEMO_SPEECH_URL, settings.NEMO_SPEECH_API_KEY, settings.ASR_WORD_BOOST)
             else:
-                raise ValueError(f"Unknown ASR_BACKEND {settings.ASR_BACKEND!r} (use 'nemotron' or 'fake')")
+                raise ValueError(f"Unknown ASR_BACKEND {settings.ASR_BACKEND!r} (use 'nemo_speech', 'nemotron' or 'fake')")
         return _backend
 
 

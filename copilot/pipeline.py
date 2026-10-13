@@ -111,8 +111,17 @@ def process_recording(call: Call, legs: list[bytes], speakers: list[str] | None 
         else:
             samples = decoded[0]
             diarizer = get_diarizer()
-            turns = diarizer.diarize(samples) if diarizer else []
-            if turns:
+            if getattr(backend, "supports_speakers", False) and diarizer is not None:
+                # Speech service: ASR + diarization in one request; consecutive segments of a speaker form a turn.
+                pieces = []
+                for seg, spk in backend.transcribe_with_speakers(samples):
+                    if pieces and pieces[-1].speaker == spk:
+                        pieces[-1].end, pieces[-1].text = seg.end, f"{pieces[-1].text} {seg.text}"
+                    else:
+                        pieces.append(Piece(seg.start, seg.end, spk, seg.text))
+                langs.append("en-US")
+                by_turn = True
+            elif diarizer is not None and (turns := diarizer.diarize(samples)):
                 pieces = []
                 for t in turns:
                     span = _transcribe_span(samples, t.start, t.end, t.speaker, backend, langs)

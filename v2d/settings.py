@@ -57,15 +57,23 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = int(os.environ.get("MAX_UPLOAD_MB", "200")) * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = DATA_UPLOAD_MAX_MEMORY_SIZE
 
 # --- Voice-2-Decisions ---
-# ASR_BACKEND: "nemotron" (real model, GPU recommended) or "fake" (no model; used by tests and CPU-only boxes).
+# ASR_BACKEND:
+#   nemo_speech  the speech service (NeMo-Speech.cpp, English Nemotron Q8 + diarization) at NEMO_SPEECH_URL (fastest)
+#   nemotron     Nemotron 3.5 ASR in this process via Transformers (no extra service; GPU recommended)
+#   fake         no model; tests and CPU-only boxes
 ASR_BACKEND = os.environ.get("ASR_BACKEND", "nemotron")
+NEMO_SPEECH_URL = os.environ.get("NEMO_SPEECH_URL", "http://asr:8080")
+NEMO_SPEECH_API_KEY = os.environ.get("NEMO_SPEECH_API_KEY", "")
+ASR_WORD_BOOST = float(os.environ.get("ASR_WORD_BOOST", "4.0"))  # boost for customer / airport / FBO names; 0 = off
 ASR_MODEL_ID = os.environ.get("ASR_MODEL_ID", "nvidia/nemotron-3.5-asr-streaming-0.6b")
 ASR_LANGUAGE = os.environ.get("ASR_LANGUAGE", "en-US")  # a locale such as en-US, or "auto"
 ASR_DEVICE = os.environ.get("ASR_DEVICE", "auto")  # auto | cuda | cpu
 ASR_CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "30"))
 FAKE_ASR_TEXT = os.environ.get("FAKE_ASR_TEXT", "")
 # Mono calls: who spoke when. nemotron = nvidia/Nemotron-3-Diarization, fake = tests, off = no speaker labels.
-DIARIZER = os.environ.get("DIARIZER", "nemotron" if ASR_BACKEND == "nemotron" else "off")
+# With ASR_BACKEND=nemo_speech, recordings get speakers from the speech service in the same request; this setting
+# then only drives live calls (whose streaming session keeps speaker IDs stable across chunks).
+DIARIZER = os.environ.get("DIARIZER", "nemotron" if ASR_BACKEND in ("nemotron", "nemo_speech") else "off")
 DIARIZER_MODEL_ID = os.environ.get("DIARIZER_MODEL_ID", "nvidia/Nemotron-3-Diarization")
 DIARIZER_STREAMING_MODE = os.environ.get("DIARIZER_STREAMING_MODE", "low_latency")  # or very_low_latency, ultra_low_latency
 # Two-leg calls: "separate" transcribes each leg with a speaker label (default); "mix" folds them to one mono leg.
