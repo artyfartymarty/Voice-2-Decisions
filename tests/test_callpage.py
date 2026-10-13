@@ -1,6 +1,7 @@
 """The call page a call handler watches during a live call: panels, prompt cards, slot hint, alerts view."""
 import json
 
+import numpy as np
 import pytest
 
 from copilot import callview
@@ -210,7 +211,9 @@ def test_streamed_chunks_build_a_live_call(client, fake_asr):
     lines = ["Northwind Aviation here, account 204511.", "I need a fuel quote at KTEB please.", ""]
     for i, text in enumerate(lines):
         fake_asr.text = text
-        data = {"audio": SimpleUploadedFile("chunk.wav", wav_bytes(tone(2.0)), "audio/wav")}
+        # Each chunk ends in a pause, as speech does: the live path only transcribes up to the last pause.
+        chunk = np.concatenate([tone(1.5), np.zeros(8000, dtype=np.float32)])
+        data = {"audio": SimpleUploadedFile("chunk.wav", wav_bytes(chunk), "audio/wav")}
         if i == len(lines) - 1:
             data["final"] = "true"
         assert client.post(url, data).status_code == 200
