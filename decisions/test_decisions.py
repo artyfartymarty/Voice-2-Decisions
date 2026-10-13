@@ -242,15 +242,24 @@ class Winnow(unittest.TestCase):
         self.assertEqual(call.variables["tail_number"]["value"], "N123AB")
         self.assertEqual(len(norm.asked), 1)
 
-        # Not asked when the parser already got it, or when Winnow says no full tail was said.
+        # Model is the main path: even a tail the parser could read goes to the model, and the agent reads it back.
+        norm = Normalizer("N88NW")
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm)
-        call.feed("caller", "Tail number November eight eight November whiskey.")
-        self.assertNotIn("tail_said", FakeWinnow.seen[-1]["questions"])
+        out = call.feed("caller", "Tail number November eight eight November whiskey.")
+        self.assertEqual(call.variables["tail_number"]["value"], "N88NW")
+        self.assertEqual(len(norm.asked), 1)
+        self.assertIn("Read the tail number back", out["prompts"][-1])
+        # Not asked when Winnow says no full tail was said.
         FakeWinnow.tail_said = 0.1
         try:
             Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm).feed("caller", "The tail is one two three.")
         finally:
             FakeWinnow.tail_said = 0.9
+        self.assertEqual(len(norm.asked), 1)
+        # TAIL_MODE=parser: the parser reads it and the model isn't asked.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm, tail_mode="parser")
+        call.feed("caller", "Tail number November eight eight November whiskey.")
+        self.assertNotIn("tail_said", FakeWinnow.seen[-1]["questions"])
         self.assertEqual(len(norm.asked), 1)
 
         # Its answer is validated: not a registration, or not on the customer's fleet -> not used.

@@ -152,10 +152,12 @@ the API while Winnow is loading or if it stops answering.
 - **Real data:** put `customers.csv`, `location_notes.csv` (and optionally `disputes.csv`, `fleet.csv`,
   `airport_aliases.csv`) in `decisions/reference`, uncomment the volume in `docker-compose.yml`, set
   `REFERENCE_DIR=/reference`.
-- **Tail-number fallback (optional, off by default):** set `TAIL_NORMALIZER_URL` (and `TAIL_NORMALIZER_MODEL` for an
-  OpenAI-compatible endpoint) to call an external model when Winnow says the caller just said a complete tail number
-  but the parser found none in that line. Whatever it returns must still be a valid registration and, if the customer
-  has a fleet on file, one of their tails; otherwise the agent is asked to confirm. See `normalizer.py`.
+- **Tail numbers:** set `TAIL_NORMALIZER_URL` (and `TAIL_NORMALIZER_MODEL` for an OpenAI-compatible endpoint) to the
+  model that writes tail numbers. When a caller line is about a tail (or answers the agent asking for one), the same
+  Winnow request asks "did the caller just say a complete tail number?"; on yes, that line goes to the model, its
+  answer must be a valid registration and, if the customer has a fleet on file, one of their tails, and the agent is
+  prompted to read it back. Without `TAIL_NORMALIZER_URL`, or with `TAIL_MODE=parser`, the built-in parser reads tails
+  instead (see Notes). See `normalizer.py`.
 - **How sure Winnow must be:** `DECIDE_MIN_P` (default 0.5).
 - **Fuzzy names:** customer and location are matched against the reference lists first. When a match came from a heard
   name rather than an exact code or account number, the same Winnow request also asks "which customer / airport did
@@ -167,9 +169,18 @@ the API while Winnow is loading or if it stops answering.
 | `events.py` | Nova Sonic / plain events -> (speaker, text, final) |
 | `engine.py` | one call: variables, auto-calling, decisions |
 | `functions.py` | the functions and the variables they need |
-| `normalizer.py` | optional external model for tail numbers the parser can't read |
+| `normalizer.py` | the external model that writes tail numbers |
 | `decider.py` | Winnow-12B `choice` question on `/v1/systemone`, keyword fallback |
 | `server.py`, `console.html` | the HTTP API and the console |
 | `replay.py` | feed a script, Nova events or typed lines |
 | `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
+
+## Notes: omitted for now
+
+- **Tail numbers go to the external model, not the parser.** The deterministic tail parser (`copilot/slots.py`:
+  phonetic alphabet, aviation digits, "one twenty three", a dropped "November", tails over several breaths) is not the
+  main path. It is used only with `TAIL_MODE=parser` or when no `TAIL_NORMALIZER_URL` is set.
+- **No special handling of mid-tail corrections** ("forget the November, I meant tango", "scratch that") on the main
+  path: the model sees the caller's line and the few before it and is trusted to resolve them; the format and fleet
+  checks and the agent's read-back are the safety net. (The parser handles them when it's in use, and its tests stay.)

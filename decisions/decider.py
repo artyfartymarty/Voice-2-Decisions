@@ -35,10 +35,12 @@ class RuleDecider:
     name = "rules"
 
     def decide(self, latest: str, recent: list[dict], variables: dict, unsure: dict | None = None) -> dict:
+        # No model to ask "was a full tail said?": when the line is about a tail, let the normalizer try.
+        extra = {"variables": {"tail_said": 1.0}} if (unsure or {}).get("tail_said") else {}
         for fn, pattern in RULES:
             if pattern.search(latest):
-                return {"function": fn, "p": 1.0, "by": self.name}
-        return {"function": None, "p": 1.0, "by": self.name}
+                return {"function": fn, "p": 1.0, "by": self.name, **extra}
+        return {"function": None, "p": 1.0, "by": self.name, **extra}
 
 
 class WinnowDecider:

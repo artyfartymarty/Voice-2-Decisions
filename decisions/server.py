@@ -40,6 +40,7 @@ class App:
         self.decider = decider_mod.from_env(env)
         self.min_p = float(env.get("DECIDE_MIN_P", "0.5"))
         self.normalizer = normalizer_from_env(env)
+        self.tail_mode = env.get("TAIL_MODE", "model")
         self.webhook = env.get("DECISION_WEBHOOK_URL", "")
         self.calls: dict[str, tuple[Call, EventReader, threading.Lock]] = {}
         self.lock = threading.Lock()
@@ -47,7 +48,7 @@ class App:
     def call(self, call_id: str):
         with self.lock:
             if call_id not in self.calls:
-                self.calls[call_id] = (Call(call_id, self.extractor, self.decider, self.min_p, normalizer=self.normalizer), EventReader(), threading.Lock())
+                self.calls[call_id] = (Call(call_id, self.extractor, self.decider, self.min_p, normalizer=self.normalizer, tail_mode=self.tail_mode), EventReader(), threading.Lock())
             return self.calls[call_id]
 
     def events(self, call_id: str, payload) -> dict:

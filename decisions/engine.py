@@ -26,9 +26,14 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 class Call:
-    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",), normalizer=None):
+    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",), normalizer=None,
+                 tail_mode: str = "model"):
         self.id = call_id
         self.extractor, self.decider, self.normalizer = extractor, decider, normalizer
+        # "model": tail numbers come from the external normalizer (Winnow says one was said -> the model writes it ->
+        # format + fleet check). "parser": the deterministic parser in copilot/slots.py. Without a normalizer
+        # configured, "model" can't run, so the parser is used.
+        self.tail_by_model = tail_mode == "model" and normalizer is not None
         self.min_p, self.decide_on = min_p, set(decide_on)
         self.variables: dict[str, dict] = {}  # name -> {value, label, confidence, heard, speaker}
         self.tail_slot = slots.new_slot()
@@ -68,6 +73,8 @@ class Call:
                         places = [(icao, alias, self.extractor.ref.locations[icao].fbo) for icao, alias in self.extractor.place_names]
                         self._unsure["icao"] = self._candidates(e, places)
             customer = self.variables.get("customer_number", {}).get("value")
+            if self.tail_by_model:
+                continue
             for ev in slots.update(self.tail_slot, sentence, speaker, self.extractor, customer):
                 if ev["type"] == "validate":
                     changed.append(self._set("tail_number", ev["tail_number"], ev["country"], ev["confidence"], ev["heard"], speaker))
@@ -99,7 +106,12 @@ class Call:
             self.prompts.append(msg)
             return []
         self.tail_slot.update(value=tail, partial="", partial_by="", pending=False)
-        return ["tail_number"] if self._set("tail_number", tail, country, 0.8, text, speaker) else []
+        if not self._set("tail_number", tail, country, 0.8, text, speaker):
+            return []
+        msg = f"Read the tail number back to the caller: {tail}."
+        prompts.append(msg)
+        self.prompts.append(msg)
+        return ["tail_number"]
 
     def _settle(self, picks: dict, speaker: str) -> list[str]:
         """Apply Winnow's answers to this line's unsure matches (a pick of "none" keeps the fuzzy match)."""
@@ -168,8 +180,10 @@ class Call:
         decision = None
         if speaker in self.decide_on:
             # One model request: what the caller wants, plus which customer / location they meant if the match was fuzzy.
+            agent_asked = any(l["speaker"] != speaker and slots.TAIL_TALK.search(l["text"]) for l in self.transcript[-2:-1])
             ask_tail = (self.normalizer is not None and "tail_number" not in changed
-                        and bool(slots.TAIL_TALK.search(line["text"]) or self.tail_slot["pending"] or self.tail_slot["partial"]))
+                        and bool(slots.TAIL_TALK.search(line["text"]) or agent_asked
+                                 or self.tail_slot["pending"] or self.tail_slot["partial"]))
             if ask_tail:
                 self._unsure["tail_said"] = True
             picked = self.decider.decide(line["text"], self.transcript, self.variables, self._unsure)
