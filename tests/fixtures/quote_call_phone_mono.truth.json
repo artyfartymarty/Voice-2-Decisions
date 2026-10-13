@@ -1,0 +1,42 @@
+[
+ {
+  "start": 0.0,
+  "end": 4.87,
+  "role": "agent"
+ },
+ {
+  "start": 5.02,
+  "end": 11.13,
+  "role": "caller"
+ },
+ {
+  "start": 11.28,
+  "end": 20.725,
+  "role": "caller"
+ },
+ {
+  "start": 20.875,
+  "end": 23.12,
+  "role": "agent"
+ },
+ {
+  "start": 23.27,
+  "end": 29.005,
+  "role": "caller"
+ },
+ {
+  "start": 29.155,
+  "end": 32.4,
+  "role": "caller"
+ },
+ {
+  "start": 32.55,
+  "end": 38.225,
+  "role": "agent"
+ },
+ {
+  "start": 38.375,
+  "end": 41.53,
+  "role": "caller"
+ }
+]

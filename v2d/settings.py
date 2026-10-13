@@ -64,6 +64,22 @@ ASR_LANGUAGE = os.environ.get("ASR_LANGUAGE", "en-US")  # a locale such as en-US
 ASR_DEVICE = os.environ.get("ASR_DEVICE", "auto")  # auto | cuda | cpu
 ASR_CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "30"))
 FAKE_ASR_TEXT = os.environ.get("FAKE_ASR_TEXT", "")
+# Mono calls: who spoke when. nemotron = nvidia/Nemotron-3-Diarization, fake = tests, off = no speaker labels.
+DIARIZER = os.environ.get("DIARIZER", "nemotron" if ASR_BACKEND == "nemotron" else "off")
+DIARIZER_MODEL_ID = os.environ.get("DIARIZER_MODEL_ID", "nvidia/Nemotron-3-Diarization")
+DIARIZER_STREAMING_MODE = os.environ.get("DIARIZER_STREAMING_MODE", "low_latency")  # or very_low_latency, ultra_low_latency
+# Two-leg calls: "separate" transcribes each leg with a speaker label (default); "mix" folds them to one mono leg.
+LEG_MODE = os.environ.get("LEG_MODE", "separate")
+
+# Reference data for the use-case tools (customers.csv, location_notes.csv). Defaults to the synthetic fixtures.
+REFERENCE_DIR = Path(os.environ.get("REFERENCE_DIR") or BASE_DIR / "fixtures" / "reference")
+# Sentiment alert: fire when the average of the last SENTIMENT_WINDOW scored sentences drops to SENTIMENT_ALERT_AT or below.
+SENTIMENT_WINDOW = int(os.environ.get("SENTIMENT_WINDOW", "3"))
+SENTIMENT_ALERT_AT = float(os.environ.get("SENTIMENT_ALERT_AT", "-0.4"))
+# Dispute guidance fires for locations with at least this many disputes in their private notes.
+DISPUTE_MIN_COUNT = int(os.environ.get("DISPUTE_MIN_COUNT", "3"))
+# Optional: alerts (dispatcher, managers) are POSTed here as JSON, e.g. a Slack or Teams incoming webhook.
+NOTIFY_WEBHOOK_URL = os.environ.get("NOTIFY_WEBHOOK_URL", "")
 
 LOGGING = {
     "version": 1,

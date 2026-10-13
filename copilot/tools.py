@@ -66,3 +66,6 @@ def open_question(text, at=None):
 @tool()
 def mark_key_moment(text, at=None):
     return {"logged": "key_moment"}
+
+
+from . import usecases  # noqa: E402,F401  registers quote_lookup, dispute_guidance, alert_manager

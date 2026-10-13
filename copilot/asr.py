@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from django.conf import settings
 
-from .audio import TARGET_SR, split_on_silence
+from .audio import TARGET_SR, utterances
 
 log = logging.getLogger(__name__)
 LANG_TAG = re.compile(r"<([a-z]{2,3}-[A-Z]{2})>")
@@ -44,7 +44,7 @@ class ASRBackend:
 
     def transcribe(self, samples: np.ndarray) -> Transcript:
         transcript = Transcript(duration=len(samples) / TARGET_SR)
-        for start, end in split_on_silence(samples, max_seconds=settings.ASR_CHUNK_SECONDS):
+        for start, end in utterances(samples, max_seconds=settings.ASR_CHUNK_SECONDS):
             text, lang = self.transcribe_chunk(samples[start:end])
             if lang and not transcript.language:
                 transcript.language = lang

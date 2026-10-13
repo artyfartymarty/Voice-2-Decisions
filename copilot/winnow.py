@@ -8,7 +8,14 @@ Each finished sentence is scored against rule sets for five kinds of moment:
     question     "can you confirm the start date?"
     key_moment   prices, budgets, deadlines, cancellations
 
-Every moment carries the tool call it maps to (see tools.py), so downstream code can act on it.
+On top of those, Winnower tracks the call as a whole (customer, location, whether a quote was asked for,
+rolling sentiment) against the reference data in reference.py, and raises three use-case moments:
+
+    quote_request    a quote is wanted and both customer and location are known  -> quote_lookup
+    dispute_risk     a quote is wanted at a location with a dispute history       -> dispute_guidance
+    sentiment_shift  the conversation turns negative                              -> alert_manager
+
+Every moment carries the tool call it maps to (see tools.py and usecases.py), so downstream code can act on it.
 Winnower keeps state between partial transcripts: it only judges sentences once they end,
 holds the unfinished tail until more text arrives, and never reports the same sentence twice.
 """
@@ -16,6 +23,8 @@ import re
 from dataclasses import asdict, dataclass, field
 
 KINDS = ("decision", "action_item", "risk", "question", "key_moment")
+USE_CASE_KINDS = ("quote_request", "dispute_risk", "sentiment_shift")
+ALL_KINDS = KINDS + USE_CASE_KINDS
 
 TOOL_FOR_KIND = {
     "decision": "log_decision",
@@ -23,6 +32,9 @@ TOOL_FOR_KIND = {
     "risk": "flag_risk",
     "question": "open_question",
     "key_moment": "mark_key_moment",
+    "quote_request": "quote_lookup",
+    "dispute_risk": "dispute_guidance",
+    "sentiment_shift": "alert_manager",
 }
 
 _I = re.IGNORECASE
@@ -35,13 +47,15 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
     ],
     "action_item": [
         (re.compile(r"\b(action item|follow[- ]up|next step)\b", _I), 0.8),
-        (re.compile(r"\b(i'll|i will|we'll|we will|you'll|you will|[A-Z][a-z]+ will)\s+(send|email|call|schedule|set up|share|draft|prepare|review|update|check|book|follow|get|create|write|loop)\b"), 0.85),
+        (re.compile(r"\b((?i:i'll|i will|we'll|we will|you'll|you will)|[A-Z][a-z]+ will)\s+(?i:send|email|call|schedule|set up|share|draft|prepare|review|update|check|book|follow|get|create|write|loop)\b"), 0.85),
         (re.compile(r"\b(can|could|would) you (please )?(send|email|call|schedule|set up|share|draft|prepare|review|update|check|book|follow|get|create|write)\b", _I), 0.7),
         (re.compile(r"\b(need(s)? to|have to|must)\s+(send|email|call|schedule|set up|share|draft|prepare|review|update|check|book|follow|get|create|write)\b", _I), 0.6),
     ],
     "risk": [
         (re.compile(r"\b(concern(ed)?|worried|worry|risk|blocker|blocked|problem|issue|objection|hesitant)\b", _I), 0.75),
         (re.compile(r"\b(too (expensive|slow|risky|late)|won't work|doesn't work|can't afford|not sure (we|this)|push ?back)\b", _I), 0.8),
+        # complaints are a risk to the account
+        (re.compile(r"\b(overcharg\w*|unacceptable|frustrat\w*|disappoint\w*|complain\w*|dispute\w*|ripped off)\b", _I), 0.75),
     ],
     "key_moment": [
         (re.compile(r"[$€£]\s?\d[\d,]*(\.\d+)?\s?(k|m|million|thousand)?\b", _I), 0.85),
@@ -70,6 +84,20 @@ CLAUSE_BREAK = re.compile(
 MIN_CLAUSE_WORDS = 3
 MIN_SCORE = 0.55
 
+QUOTE_INTENT = re.compile(r"\b(quotes?|quoted|quoting|pric(e|es|ing)|how much|per gallon|rates?|cost)\b", _I)
+SENTIMENT = [
+    (re.compile(r"\b(frustrat\w*|annoy\w*|angry|furious|upset|unacceptable|ridiculous|terrible|awful|horrible|disappoint\w*"
+                r"|overcharg\w*|ripped off|rip-?off|waste of|worst|complain\w*|fed up|sick of|never again|not happy|unhappy|hate)\b", _I), -1.0),
+    (re.compile(r"\b(problem|wrong|late|delay(ed)?|too expensive|confus\w*|mistake)\b", _I), -0.5),
+    (re.compile(r"\b(great|perfect|excellent|appreciate\w*|thank(s| you)|wonderful|happy|love|awesome|fantastic|sounds good|glad|helpful)\b", _I), 1.0),
+]
+
+
+def sentiment(text: str) -> float:
+    """Lexicon score in [-1, 1]; 0 means no sentiment words."""
+    total = sum(weight * len(pat.findall(text)) for pat, weight in SENTIMENT)
+    return max(-1.0, min(1.0, total))
+
 
 @dataclass
 class Moment:
@@ -81,10 +109,12 @@ class Moment:
     owner: str = ""
     due: str = ""
     also: list[str] = field(default_factory=list)
+    args: dict = field(default_factory=dict)  # extra tool arguments for use-case moments
+    speaker: str = ""  # "agent", "caller"... when the call came in as separate legs
 
     @property
     def tool_call(self) -> dict:
-        args = {"text": self.text}
+        args = {"text": self.text, **self.args}
         if self.kind == "action_item":
             args.update(owner=self.owner, due=self.due)
         if self.start is not None:
@@ -152,14 +182,75 @@ def _norm(sentence: str) -> str:
     return re.sub(r"[^a-z0-9 ]", "", sentence.lower()).strip()
 
 
-class Winnower:
-    """Incremental winnowing over a stream of partial transcripts."""
+def new_context() -> dict:
+    return {"customer": None, "customer_name": None, "icao": None, "quote_intent": False,
+            "quoted": [], "dispute_warned": [], "recent": {}, "alerted": {}}
 
-    def __init__(self, pending: str = "", seen: set[str] | None = None):
+
+class Winnower:
+    """Incremental winnowing over a stream of partial transcripts.
+
+    `context` is JSON-serializable call state (who, where, quote asked for, recent sentiment); the pipeline
+    stores it on the Call so a live call keeps it between requests.
+    """
+
+    def __init__(self, pending: str = "", seen: set[str] | None = None, context: dict | None = None,
+                 reference=None, sentiment_window: int = 3, sentiment_alert_at: float = -0.4, dispute_min_count: int = 1):
         self.pending = pending
         self.seen = set(seen or ())
+        self.context = {**new_context(), **(context or {})}
+        self._reference = reference
+        self.sentiment_window = sentiment_window
+        self.sentiment_alert_at = sentiment_alert_at
+        self.dispute_min_count = dispute_min_count
 
-    def feed(self, text: str, start: float | None = None, end: float | None = None, final: bool = False) -> list[Moment]:
+    @property
+    def reference(self):
+        if self._reference is None:
+            from . import reference
+            self._reference = reference.get()
+        return self._reference
+
+    def _use_cases(self, clause: str, start, end, speaker: str = "") -> list[Moment]:
+        ctx, out = self.context, []
+        found = self.reference.find_customer(clause)
+        if found:
+            ctx["customer"], ctx["customer_name"] = found
+        icao = self.reference.find_location(clause)
+        if icao:
+            ctx["icao"] = icao
+        if QUOTE_INTENT.search(clause):
+            ctx["quote_intent"] = True
+
+        if ctx["quote_intent"] and ctx["icao"]:
+            pair = f"{ctx['customer']}:{ctx['icao']}"
+            if ctx["customer"] and pair not in ctx["quoted"]:
+                ctx["quoted"].append(pair)
+                out.append(Moment("quote_request", clause, 0.9, start, end, speaker=speaker,
+                                  args={"customer_number": ctx["customer"], "icao": ctx["icao"]}))
+            loc = self.reference.locations.get(ctx["icao"])
+            if loc and loc.dispute_count >= self.dispute_min_count and ctx["icao"] not in ctx["dispute_warned"]:
+                ctx["dispute_warned"].append(ctx["icao"])
+                out.append(Moment("dispute_risk", clause, 0.85, start, end, speaker=speaker, args={"icao": ctx["icao"]}))
+
+        score = sentiment(clause)
+        if score:
+            # Tracked per speaker, so a friendly agent doesn't mask an angry caller (and vice versa).
+            recent = (ctx["recent"].get(speaker, []) + [[score, clause]])[-self.sentiment_window:]
+            ctx["recent"][speaker] = recent
+            scores = [s for s, _ in recent]
+            avg = sum(scores) / len(scores)
+            turned = len(scores) >= 2 and scores[-1] < 0 and scores[-2] < 0
+            if not ctx["alerted"].get(speaker) and (turned or (sum(s < 0 for s in scores) >= 2 and avg <= self.sentiment_alert_at)):
+                ctx["alerted"][speaker] = True
+                out.append(Moment("sentiment_shift", clause, round(-avg, 2), start, end, speaker=speaker,
+                                  args={"speaker": speaker, "avg_sentiment": round(avg, 2), "recent": [t for _, t in recent]}))
+            elif ctx["alerted"].get(speaker) and avg >= 0:
+                ctx["alerted"][speaker] = False  # recovered: a later downturn alerts again
+        return out
+
+    def feed(self, text: str, start: float | None = None, end: float | None = None, final: bool = False,
+             speaker: str = "") -> list[Moment]:
         sentences, tail = split_sentences(f"{self.pending} {text}")
         if final and tail:
             sentences, tail = sentences + [tail], ""
@@ -173,11 +264,15 @@ class Winnower:
                 self.seen.add(key)
                 moment = judge(clause, start, end)
                 if moment:
+                    moment.speaker = speaker
+                    if moment.kind == "action_item" and speaker and moment.owner in ("", "I"):
+                        moment.owner = speaker  # "I'll send it", said by the agent -> owner: agent
                     moments.append(moment)
+                moments.extend(self._use_cases(clause, start, end, speaker))
         return moments
 
-    def flush(self) -> list[Moment]:
-        return self.feed("", final=True)
+    def flush(self, speaker: str = "") -> list[Moment]:
+        return self.feed("", final=True, speaker=speaker)
 
 
 def winnow(text: str) -> list[Moment]:
@@ -188,7 +283,7 @@ def winnow(text: str) -> list[Moment]:
 
 def summarize(moments: list[dict]) -> dict:
     """Summary of a call from its moments (dicts with at least kind/text/owner/due)."""
-    by_kind = {k: [m for m in moments if m["kind"] == k] for k in KINDS}
+    by_kind = {k: [m for m in moments if m["kind"] == k] for k in ALL_KINDS}
     headline = by_kind["decision"][0]["text"] if by_kind["decision"] else (
         by_kind["action_item"][0]["text"] if by_kind["action_item"] else "No decisions or action items detected.")
     return {
@@ -199,4 +294,7 @@ def summarize(moments: list[dict]) -> dict:
         "risks": [m["text"] for m in by_kind["risk"]],
         "open_questions": [m["text"] for m in by_kind["question"]],
         "key_moments": [m["text"] for m in by_kind["key_moment"]],
+        "quotes": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["quote_request"]],
+        "dispute_warnings": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["dispute_risk"]],
+        "sentiment_alerts": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["sentiment_shift"]],
     }

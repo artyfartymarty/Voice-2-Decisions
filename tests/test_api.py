@@ -35,7 +35,19 @@ def test_two_legs_are_mixed(client, wav):
     from django.core.files.uploadedfile import SimpleUploadedFile
     r = client.post("/api/calls/", {"audio": SimpleUploadedFile("a.wav", wav), "audio_b": SimpleUploadedFile("b.wav", wav)})
     assert r.status_code == 201
-    assert r.json()["duration"] == pytest.approx(1.0, abs=0.01)
+    data = r.json()
+    assert data["duration"] == pytest.approx(1.0, abs=0.01)
+    assert [s["speaker"] for s in data["segments"]] == ["agent", "caller"]
+
+
+def test_two_legs_custom_labels_and_mix_mode(client, wav, settings):
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    r = client.post("/api/calls/", {"audio": SimpleUploadedFile("a.wav", wav), "audio_b": SimpleUploadedFile("b.wav", wav),
+                                    "speaker_a": "dispatcher", "speaker_b": "pilot"}).json()
+    assert [s["speaker"] for s in r["segments"]] == ["dispatcher", "pilot"]
+    settings.LEG_MODE = "mix"
+    r = client.post("/api/calls/", {"audio": SimpleUploadedFile("a.wav", wav), "audio_b": SimpleUploadedFile("b.wav", wav)}).json()
+    assert [s["speaker"] for s in r["segments"]] == [""]  # one mixed leg, no labels
 
 
 def test_upload_without_audio_is_400(client):

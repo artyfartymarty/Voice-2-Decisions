@@ -107,3 +107,24 @@ docker compose down                            # stop (the data volume with db +
 | 403 CSRF on the upload form | set `DJANGO_CSRF_TRUSTED_ORIGINS` to the exact origin you browse to |
 | model download fails or is rate limited | check outbound HTTPS to huggingface.co; optionally set `HF_TOKEN` in `.env` |
 | out of disk during build | grow the root volume to 40 GB+ (`docker system df` shows usage) |
+
+## Earlier design (gfl-copilot, never pushed) and how this one differs
+
+An earlier cloud session designed a copilot under `gfl-copilot/` that never reached a repo. Its handoff was recovered
+on 2026-10-12. Kept here so nothing in it is lost:
+
+| | Earlier gfl-copilot | This repo today |
+|---|---|---|
+| ASR | `nvidia/nemotron-speech-streaming-en-0.6b` **Q8 GGUF** on **NeMo-Speech.cpp v0.2.0** (`nemo-speech serve` on 127.0.0.1:8080, prebuilt CUDA archive, SHA-pinned). Measured ~2.3 ms / 160 ms chunk on a 4090, 2.66% WER; multilingual 3.5 rejected for English (4.58% vs 1.95% WER) | `nvidia/nemotron-3.5-asr-streaming-0.6b` (multilingual) via Transformers, bf16 |
+| Decider ("winnow") | **Winnow-12B Q8_0** (`EldanRing/winnow-inference` @ a50c7d0): patched llama.cpp, `/v1/systemone`, CUDA 13.0.2, `winnow-server` on 127.0.0.1:8091, Gemma-4-12B base, 8K ctx, ~143 ms median on a 5070 Ti, run every 1.5 s on partials. File `models/gguf/Winnow-12B-Q8_0.gguf`, 12,669,646,592 bytes, sha256 `b710efc4c0d048ee61eed92c5fef5ce323a4d17e7c51f9f0533cc72ae50818ea` | rule-based `copilot/winnow.py` (regex + lexicon), no LLM |
+| Speakers | stereo split (`STEREO_CHANNEL0=agent`), per-leg WebSocket streams | mono first: Nemotron 3 Diarization + role inference; two legs optional |
+| Service | FastAPI gateway (Python 3.15, lazy imports, 3.14 fallback) supervising the two native servers; Django UI separate on python:3.14-slim, port 8080 | one Django app (Python 3.12) with UI + JSON API on port 8000 |
+| API | `/health`, `/ready`, `POST /v1/calls/analyze`, `POST /v1/calls/{id}/start`, `WS .../legs/{agent|customer}/stream`, `WS .../events`, `DELETE`, optional Bearer auth | `/healthz`, `POST /api/calls/`, live via `POST /api/calls/{id}/partial/`, summary endpoint; no auth |
+| Tools | `get_customer_details`, `get_credit_exposure_details`, `get_sales_rep_details` (call start), `validate_tail_number` (≥0.8), `get_fuel_price` (airport mention), `get_order_details`, `get_quote_details` (intent); config in moments.json, questions.json, word_boost.json | `quote_lookup`, `dispute_guidance`, `alert_manager` + decision/action/risk/question/key-moment loggers |
+| Hardware | driver ≥ 580, ~35 GB disk, ~13 GB VRAM for Winnow + 1-2 GB ASR (`WINNOW_CONTEXT=4096` on OOM at 16 GB) | driver ≥ 570, ~40 GB disk, ~2 GB VRAM |
+| EC2 setup | `./setup.sh --calls-dir /data/gfl-usecases [--cuda-arch 89] [--skip-build]`; CUDA_ARCH from `nvidia-smi --query-gpu=compute_cap` (86 A10G, 89 L4/L40S, 120 50-series / RTX PRO 6000) | `docker compose ... up -d --build` (this file) |
+
+Env keys it used: `CUDA_ARCH, GPU_ID, WINNOW_TARGET=12b-q8, WINNOW_CONTEXT=8192, MODELS_DIR, PYTHON_VERSION=3.15,
+CALLS_DIR, CUSTOMERS_CSV, CUSTOMER_ID_COLUMN, STEREO_CHANNEL0=agent, DECIDE_EVERY_S=1.5, GATEWAY_API_KEY, KNOWN_AIRPORTS`.
+Known gaps it listed: only stub models tested, lightweight entity extractor (full spec in
+`UC4_Entity_Extraction_Agent_Handoff.md`), unauthenticated browser WebSockets, no Five9 VoiceStream bridge.

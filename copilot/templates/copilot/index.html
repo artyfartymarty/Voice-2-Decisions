@@ -9,8 +9,13 @@
     <input type="text" id="title" name="title" placeholder="Acme renewal call">
     <label for="audio">Recording (wav, mp3, m4a, webm…). For a two-leg call, this is the first leg.</label>
     <input type="file" id="audio" name="audio" accept="audio/*,video/webm">
-    <label for="audio_b">Second leg (optional). Both legs are mixed down to one mono track.</label>
+    <label for="audio_b">Second leg (optional). Each leg is transcribed separately and labeled, so caller and agent are tracked apart.</label>
     <input type="file" id="audio_b" name="audio_b" accept="audio/*,video/webm">
+    <label for="speaker_a">Who is on each leg</label>
+    <div style="display:flex; gap:8px">
+      <input type="text" id="speaker_a" name="speaker_a" placeholder="first leg: agent">
+      <input type="text" id="speaker_b" name="speaker_b" placeholder="second leg: caller">
+    </div>
     <button type="submit">Transcribe and find decisions</button>
   </form>
 </div>

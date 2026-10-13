@@ -19,6 +19,11 @@ def test_action_item_with_owner_and_due():
     assert m.tool_call == {"name": "create_action_item", "args": {"text": m.text, "owner": "Sarah", "due": "Friday"}}
 
 
+def test_pronoun_commitments_any_case():
+    assert judge("I will send you the quote by end of day.").kind == "action_item"
+    assert judge("i'll book the slot.").kind == "action_item"
+
+
 def test_risk_question_and_key_moment():
     assert judge("My concern is the onboarding timeline.").kind == "risk"
     assert judge("When does the pilot start?").kind == "question"
@@ -95,7 +100,8 @@ def test_summary():
         "Sarah will send the contract by Friday. My concern is the timeline. Can you confirm the start date?")]
     s = summarize(moments)
     assert s["headline"] == "We decided to go with the annual plan."
-    assert s["counts"] == {"decision": 1, "action_item": 1, "risk": 1, "question": 1, "key_moment": 1}
+    assert s["counts"] == {"decision": 1, "action_item": 1, "risk": 1, "question": 1, "key_moment": 1,
+                           "quote_request": 0, "dispute_risk": 0, "sentiment_shift": 0}
     assert s["action_items"][0]["owner"] == "Sarah"
 
 

@@ -34,4 +34,13 @@ curl -fsS "$BASE/api/calls/$LIVE/summary/" > "$TMP/live.json"
 json 'd["status"], d["counts"]' < "$TMP/live.json"
 [ "$(json 'd["status"]' < "$TMP/live.json")" = "done" ]
 
+echo "4. mono quote call (phone quality): speakers, quote lookup, dispute guidance, sentiment alert"
+curl -fsS -F title="smoke quote" -F audio=@tests/fixtures/quote_call_phone_mono.wav "$BASE/api/calls/" | json 'd["id"]' > "$TMP/qid"
+curl -fsS "$BASE/api/calls/$(cat "$TMP/qid")/summary/" > "$TMP/quote.json"
+json 'd["speakers"], d["speaker_roles_confident"]' < "$TMP/quote.json"
+json '[(q["customer"], q["icao"], q.get("offer_range_gppg")) for q in d["quotes"]]' < "$TMP/quote.json"
+json '[w["prompt_agent"] for w in d["dispute_warnings"]]' < "$TMP/quote.json"
+json '[(a["speaker"], a["avg_sentiment"]) for a in d["sentiment_alerts"]]' < "$TMP/quote.json"
+[ "$(json 'bool(d["quotes"] and d["dispute_warnings"] and d["sentiment_alerts"])' < "$TMP/quote.json")" = "True" ]
+
 echo "SMOKE TEST PASSED"

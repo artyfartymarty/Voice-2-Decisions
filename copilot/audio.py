@@ -72,6 +72,46 @@ def decode(data: bytes) -> np.ndarray:
     return resample(to_mono(samples), sr)
 
 
+def utterances(samples: np.ndarray, sr: int = TARGET_SR, frame_ms: int = 30, min_gap_s: float = 0.5,
+               min_len_s: float = 0.25, pad_s: float = 0.15, max_seconds: float = 30.0) -> list[tuple[int, int]]:
+    """Find stretches of speech by frame energy. Returns (start, end) sample spans, none longer than max_seconds.
+
+    The threshold adapts to the recording (a fraction of its loud frames), so quiet legs still segment.
+    """
+    n, frame = len(samples), max(1, int(sr * frame_ms / 1000))
+    if n < frame:
+        return []
+    usable = n // frame * frame
+    rms = np.sqrt((samples[:usable].reshape(-1, frame) ** 2).mean(axis=1))
+    if not rms.any():
+        return []
+    threshold = max(0.005, 0.1 * float(np.percentile(rms, 95)))
+    voiced = rms > threshold
+    spans, start = [], None
+    for i, v in enumerate(voiced):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            spans.append([start, i])
+            start = None
+    if start is not None:
+        spans.append([start, len(voiced)])
+    merged = []
+    gap = int(min_gap_s * 1000 / frame_ms)
+    for s, e in spans:
+        if merged and s - merged[-1][1] <= gap:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    pad, out = int(pad_s * sr), []
+    for s, e in merged:
+        a, b = max(0, s * frame - pad), min(n, e * frame + pad)
+        if (b - a) / sr < min_len_s:
+            continue
+        out.extend((a + x, a + y) for x, y in split_on_silence(samples[a:b], sr, max_seconds=max_seconds))
+    return out
+
+
 def split_on_silence(samples: np.ndarray, sr: int = TARGET_SR, max_seconds: float = 30.0,
                      search_seconds: float = 3.0, frame_ms: int = 20) -> list[tuple[int, int]]:
     """Cut long audio into chunks of at most max_seconds, preferring the quietest frame near each cut.

@@ -9,6 +9,8 @@ services:
       - "${PORT:-8000}:8000"
     volumes:
       - v2d-data:/data   # sqlite db + Hugging Face model cache, survives rebuilds
+      # Real reference data: uncomment, put customers.csv + location_notes.csv in ./reference, set REFERENCE_DIR=/reference
+      # - ./reference:/reference:ro
     restart: unless-stopped
 
   # Test runner: docker compose run --rm test            (fast suite, no GPU or model needed)

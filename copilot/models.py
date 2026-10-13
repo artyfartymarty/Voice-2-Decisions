@@ -12,12 +12,19 @@ class Call(models.Model):
     duration = models.FloatField(default=0.0)
     # Live calls: unfinished sentence held by winnow until the next partial arrives.
     pending_text = models.TextField(blank=True)
+    # Call-level state winnow carries between partials: customer, location, quote intent, recent sentiment.
+    context = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self):
         return self.title or f"Call {self.pk}"
+
+    @property
+    def roles(self) -> dict:
+        """Diarized speaker -> role ("speaker 1" -> "agent")."""
+        return (self.context or {}).get("roles", {}).get("roles", {})
 
     @property
     def transcript(self) -> str:
@@ -29,9 +36,14 @@ class Segment(models.Model):
     start = models.FloatField()
     end = models.FloatField()
     text = models.TextField()
+    speaker = models.CharField(max_length=50, blank=True)
 
     class Meta:
         ordering = ["start", "id"]
+
+    @property
+    def role(self) -> str:
+        return self.call.roles.get(self.speaker, self.speaker)
 
 
 class Moment(models.Model):
@@ -44,6 +56,7 @@ class Moment(models.Model):
     owner = models.CharField(max_length=100, blank=True)
     due = models.CharField(max_length=100, blank=True)
     also = models.JSONField(default=list, blank=True)
+    speaker = models.CharField(max_length=50, blank=True)
     tool_name = models.CharField(max_length=100)
     tool_args = models.JSONField(default=dict)
     tool_status = models.CharField(max_length=20)  # done | pending | error
@@ -52,10 +65,15 @@ class Moment(models.Model):
     class Meta:
         ordering = ["id"]
 
+    @property
+    def role(self) -> str:
+        return self.call.roles.get(self.speaker, self.speaker)
+
     def as_dict(self):
         return {
             "id": self.pk, "kind": self.kind, "text": self.text, "score": self.score,
             "start": self.start, "end": self.end, "owner": self.owner, "due": self.due, "also": self.also,
+            "speaker": self.speaker, "role": self.call.roles.get(self.speaker, self.speaker),
             "tool_call": {"name": self.tool_name, "args": self.tool_args},
             "tool_status": self.tool_status, "tool_result": self.tool_result,
         }

@@ -59,3 +59,65 @@ def test_full_pipeline_on_sample_call(nemotron):
         assert summary["counts"]["risk"] >= 1 and summary["counts"]["question"] >= 1
     finally:
         set_backend(None)
+
+
+@pytest.fixture(scope="module")
+def diarizer():
+    from copilot.diarize import NemotronDiarizer
+    d = NemotronDiarizer(settings.DIARIZER_MODEL_ID, settings.ASR_DEVICE, settings.DIARIZER_STREAMING_MODE)
+    d.load()
+    return d
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name,min_accuracy", [("quote_call_mono", 0.95), ("quote_call_phone_mono", 0.85)])
+def test_mono_call_speakers_roles_and_use_cases(nemotron, diarizer, name, min_accuracy):
+    """The main path: one mono recording -> diarize -> roles -> all three use cases. Prints role accuracy."""
+    from copilot.diarize import set_diarizer
+    from copilot.evaluation import load_truth, role_accuracy
+
+    fixtures = Path(__file__).parent / "fixtures"
+    set_backend(nemotron)
+    set_diarizer(diarizer)
+    try:
+        call = Call.objects.create(title=name)
+        pipeline.process_recording(call, [(fixtures / f"{name}.wav").read_bytes()])
+        assert call.status == "done", call.error
+        segs = [{"start": s.start, "end": s.end, "role": s.role} for s in call.segments.all()]
+        for s, seg in zip(call.segments.all(), segs):
+            print(f"\n{seg['start']:5.1f} {seg['role']:>7} ({s.speaker}): {s.text}", end="")
+        score = role_accuracy(segs, load_truth(fixtures / f"{name}.truth.json"))
+        print(f"\n{name}: roles={call.roles} accuracy={score['time_accuracy']} "
+              f"turns={score['turns_correct']}/{score['turns']} covered={score['speech_covered']}")
+        assert score["time_accuracy"] >= min_accuracy
+        summary = pipeline.call_summary(call)
+        assert summary["quotes"] and summary["quotes"][0]["icao"] == "KTEB"
+        assert summary["dispute_warnings"]
+        assert [a["speaker"] for a in summary["sentiment_alerts"]] == ["caller"]
+    finally:
+        set_backend(None)
+        set_diarizer(None)
+
+
+@pytest.mark.django_db
+def test_two_leg_quote_call_hits_all_three_use_cases(nemotron):
+    """tests/fixtures/quote_call_{agent,caller}.wav: two synthesized voices, one per leg, 44 s."""
+    fixtures = Path(__file__).parent / "fixtures"
+    set_backend(nemotron)
+    try:
+        call = Call.objects.create(title="gpu quote call")
+        pipeline.process_recording(call, [(fixtures / "quote_call_agent.wav").read_bytes(),
+                                          (fixtures / "quote_call_caller.wav").read_bytes()])
+        assert call.status == "done", call.error
+        for seg in call.segments.all():
+            print(f"\n{seg.start:5.1f} {seg.speaker:>6}: {seg.text}", end="")
+        summary = pipeline.call_summary(call)
+        print("\nSUMMARY:", summary)
+        assert {s.speaker for s in call.segments.all()} == {"agent", "caller"}
+        assert summary["quotes"][0]["customer_number"] == "204511" and summary["quotes"][0]["icao"] == "KTEB"
+        assert summary["quotes"][0]["offer_range_gppg"] == [0.085, 0.3125]
+        assert summary["dispute_warnings"][0]["dispute_count"] == 7
+        assert [a["speaker"] for a in summary["sentiment_alerts"]] == ["caller"]
+        assert any(a["owner"] == "agent" and a["due"].lower() == "end of day" for a in summary["action_items"])
+    finally:
+        set_backend(None)

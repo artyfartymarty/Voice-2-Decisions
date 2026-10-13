@@ -13,11 +13,13 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("audio", nargs="+", help="one file, or two files for the two legs of a call")
         parser.add_argument("--title", default="")
+        parser.add_argument("--speakers", default="", help="labels for the legs, e.g. agent,caller (the default for two files)")
         parser.add_argument("--full", action="store_true", help="print transcript and every moment, not just the summary")
 
-    def handle(self, *args, audio, title, full, **opts):
+    def handle(self, *args, audio, title, full, speakers, **opts):
         call = Call.objects.create(title=title or Path(audio[0]).name)
-        pipeline.process_recording(call, [Path(p).read_bytes() for p in audio])
+        labels = [s.strip() for s in speakers.split(",")] if speakers else None
+        pipeline.process_recording(call, [Path(p).read_bytes() for p in audio], labels)
         if call.status == "error":
             self.stderr.write(call.error)
             raise SystemExit(1)

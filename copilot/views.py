@@ -7,8 +7,14 @@ from django.views.decorators.http import require_GET, require_http_methods, requ
 
 from . import pipeline, tools
 from .asr import get_backend
+from .diarize import get_diarizer
 from .audio import AudioDecodeError
 from .models import Call
+
+
+def _speakers(request) -> list[str]:
+    """Optional labels for the two legs (speaker_a, speaker_b); blanks fall back to agent / caller."""
+    return [request.POST.get("speaker_a", "").strip()[:50], request.POST.get("speaker_b", "").strip()[:50]]
 
 
 # --- pages ---
@@ -20,7 +26,7 @@ def index(request):
         if not legs:
             return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50], "error": "Choose an audio file."}, status=400)
         call = Call.objects.create(title=request.POST.get("title", "")[:200])
-        pipeline.process_recording(call, legs)
+        pipeline.process_recording(call, legs, _speakers(request))
         return redirect("call_detail", pk=call.pk)
     return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50]})
 
@@ -28,7 +34,9 @@ def index(request):
 @require_GET
 def call_detail(request, pk):
     call = get_object_or_404(Call, pk=pk)
-    return render(request, "copilot/call_detail.html", {"call": call, "summary": pipeline.call_summary(call)})
+    summary = pipeline.call_summary(call)
+    counts = [(kind, kind.replace("_", " "), n) for kind, n in summary["counts"].items()]
+    return render(request, "copilot/call_detail.html", {"call": call, "summary": summary, "counts": counts})
 
 
 # --- JSON API (csrf-exempt: called by scripts, the live recorder and other services) ---
@@ -43,11 +51,15 @@ def healthz(request):
             info["gpu"] = torch.cuda.get_device_name(0)
     except ImportError:
         info["cuda"] = False
-    if request.GET.get("load") == "1" and hasattr(get_backend(), "load"):
-        get_backend().load()
-        info.update(get_backend().info())
+    diarizer = get_diarizer()
+    if request.GET.get("load") == "1":
+        if hasattr(get_backend(), "load"):
+            get_backend().load()
+            info.update(get_backend().info())
+        if diarizer:
+            diarizer.load()
     info["tools"] = tools.available()
-    return JsonResponse({"ok": True, "asr": info})
+    return JsonResponse({"ok": True, "asr": info, "diarizer": diarizer.info() if diarizer else {"backend": "off"}})
 
 
 @csrf_exempt
@@ -60,7 +72,7 @@ def api_calls(request):
     if not legs:
         return JsonResponse({"error": "send an 'audio' file (and optionally 'audio_b' for the second leg)"}, status=400)
     call = Call.objects.create(title=request.POST.get("title", "")[:200])
-    pipeline.process_recording(call, legs)
+    pipeline.process_recording(call, legs, _speakers(request))
     return JsonResponse(pipeline.call_payload(call), status=201 if call.status == "done" else 422)
 
 
@@ -75,22 +87,28 @@ def api_live_start(request):
 @csrf_exempt
 @require_POST
 def api_partial(request, pk):
-    """Feed a live call. JSON {"text": "...", "final": false} or multipart with an 'audio' chunk (+ optional 'final')."""
+    """Feed a live call. JSON {"text", "speaker", "final"} or multipart with an 'audio' chunk (+ optional 'final').
+
+    Audio chunks are diarized server-side. 'speaker' is only for text partials from a source that already knows who spoke.
+    """
     call = get_object_or_404(Call, pk=pk)
     if call.status not in ("live", "done"):
         return HttpResponseBadRequest("call is not live")
     if request.content_type == "application/json":
         body = json.loads(request.body or b"{}")
         text, audio_bytes, final = str(body.get("text", "")), None, bool(body.get("final"))
+        speaker = str(body.get("speaker", ""))[:50]
     else:
         f = request.FILES.get("audio")
         text, audio_bytes = request.POST.get("text", ""), (f.read() if f else None)
         final = request.POST.get("final", "").lower() in {"1", "true", "yes"}
+        speaker = request.POST.get("speaker", "")[:50]
     try:
-        new = pipeline.process_partial(call, text=text, audio_bytes=audio_bytes, final=final)
+        new = pipeline.process_partial(call, text=text, audio_bytes=audio_bytes, final=final, speaker=speaker)
     except AudioDecodeError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
-    return JsonResponse({"new_moments": [m.as_dict() for m in new], "pending_text": call.pending_text, "status": call.status})
+    return JsonResponse({"new_moments": [m.as_dict() for m in new], "pending_text": call.pending_text,
+                         "status": call.status, "speakers": call.roles})
 
 
 @require_GET

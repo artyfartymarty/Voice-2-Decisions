@@ -49,5 +49,20 @@ def test_split_on_silence_cuts_in_the_quiet_part():
     assert 4.0 * sr <= spans[0][1] <= 4.5 * sr
 
 
+def test_utterances_found_between_pauses():
+    sr = 16000
+    gap = np.zeros(sr, dtype=np.float32)
+    x = np.concatenate([gap, tone(1.0, amp=0.3), gap, tone(2.0, amp=0.05), gap])  # second utterance is much quieter
+    spans = audio.utterances(x, sr)
+    assert len(spans) == 2
+    (a0, a1), (b0, b1) = spans
+    assert abs(a0 / sr - 1.0) < 0.2 and abs(a1 / sr - 2.0) < 0.2
+    assert abs(b0 / sr - 3.0) < 0.2 and abs(b1 / sr - 5.0) < 0.2
+
+
+def test_utterances_silence_is_empty():
+    assert audio.utterances(np.zeros(16000, dtype=np.float32)) == []
+
+
 def test_split_short_audio_is_one_span():
     assert audio.split_on_silence(np.zeros(100, dtype=np.float32)) == [(0, 100)]
