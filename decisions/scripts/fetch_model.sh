@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
-# Get Winnow-12B (Q8 GGUF, 12.7 GB) from this repo's GitHub release into models/winnow/gguf/, checked by SHA-256.
+# Put Winnow-12B (Q8 GGUF, 12.7 GB) at models/winnow/gguf/Winnow-12B-Q8_0.gguf and check its size and SHA-256.
+# A file that already matches is never re-fetched. MODELS_SOURCE picks where it comes from:
 #
-# GitHub release files must be under 2 GB, so the model is published as 7 parts
-# (scripts/publish_model.py makes them). This downloads each part (resuming partial downloads), joins them,
-# and checks the joined file against the size and SHA-256 below. A file that already matches is never re-fetched.
+#   local   (default) never download: you copy the file in yourself (scp, aws s3 cp...); this only verifies it
+#   url     one direct download from MODEL_URL (your S3 bucket, a presigned link, any web server), resumable
+#   github  7 parts from a GitHub release (MODEL_REPO, MODEL_TAG), joined; release files must be under 2 GB,
+#           and scripts/publish_model.py makes them
 #
-#   scripts/fetch_model.sh                          # from github.com/$MODEL_REPO/releases/tag/$MODEL_TAG
-#   MODELS_SOURCE=local scripts/fetch_model.sh      # never download; only verify a file you copied in
-#
-# Settings come from the environment or .env: MODEL_REPO, MODEL_TAG, MODELS_SOURCE.
+# Settings come from the environment or .env: MODELS_SOURCE, MODEL_URL, MODEL_REPO, MODEL_TAG.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 if [ -f .env ]; then
   while IFS='=' read -r key value; do
-    case "$key" in MODEL_REPO|MODEL_TAG|MODELS_SOURCE) [ -z "${!key+x}" ] && export "$key=$value" ;; esac
+    case "$key" in MODEL_REPO|MODEL_TAG|MODELS_SOURCE|MODEL_URL) [ -z "${!key+x}" ] && export "$key=$value" ;; esac
   done < <(grep -E '^[A-Z_]+=' .env)
 fi
 REPO="${MODEL_REPO:-artyfartymarty/Voice-2-Decisions}"
 TAG="${MODEL_TAG:-models-v1}"
+SOURCE="${MODELS_SOURCE:-local}"
 
 NAME=Winnow-12B-Q8_0.gguf
 BYTES=12669646592
@@ -33,12 +33,23 @@ if [ -f "$OUT" ]; then
   echo "checking $OUT (SHA-256 of 12.7 GB takes about a minute)"
   if verify "$OUT"; then echo "ok        $OUT"; exit 0; fi
   echo "BAD       $OUT: size or SHA-256 differs; expected $BYTES bytes, sha256 $SHA256" >&2
-  [ "${MODELS_SOURCE:-download}" = "local" ] && exit 1
+  [ "$SOURCE" = "local" ] && exit 1
   mv "$OUT" "$OUT.bad"
 fi
-if [ "${MODELS_SOURCE:-download}" = "local" ]; then
-  echo "MISSING   $OUT (expected $BYTES bytes, sha256 $SHA256)" >&2; exit 1
-fi
+case "$SOURCE" in
+  local)
+    echo "MISSING   $OUT (expected $BYTES bytes, sha256 $SHA256)" >&2
+    echo "copy Winnow-12B-Q8_0.gguf there (README: 'Get the model onto the instance'), or set MODELS_SOURCE=url / github in .env" >&2
+    exit 1 ;;
+  url)
+    [ -n "${MODEL_URL:-}" ] || { echo "MODELS_SOURCE=url needs MODEL_URL in .env" >&2; exit 1; }
+    echo "download  $NAME from ${MODEL_URL%%\?*}"
+    curl -fL --retry 5 --retry-delay 3 -C - -o "$OUT.part" "$MODEL_URL"
+    verify "$OUT.part" || { echo "FAILED    download does not match size/SHA-256 (kept $OUT.part; re-run to resume)" >&2; exit 1; }
+    mv "$OUT.part" "$OUT"; rm -f "$OUT.bad"; echo "ok        $OUT (verified)"; exit 0 ;;
+  github) ;;
+  *) echo "MODELS_SOURCE must be local, url or github (got '$SOURCE')" >&2; exit 1 ;;
+esac
 
 count=$(( (BYTES + PART_BYTES - 1) / PART_BYTES ))
 mkdir -p "$PARTS_DIR"

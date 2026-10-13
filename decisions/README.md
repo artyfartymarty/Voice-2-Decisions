@@ -27,7 +27,9 @@ Nova Sonic turns the call's speech into text. This service takes that text and d
 | `escalate` | nothing; never auto-called | is angry, threatens to leave, or asks for a manager |
 
 Two containers: **winnow** (Winnow-12B on the GPU, ~14 GB VRAM) and **api** (Python standard library, 180 MB image,
-no GPU). The 12B model is downloaded from this repo's **GitHub release**, never from Hugging Face.
+no GPU). Everything the build downloads comes from GitHub (the Winnow server is built from
+`github.com/EldanRing/winnow-inference`). The 12.7 GB model file is the one thing you bring: copy it onto the instance
+(below), and nothing touches Hugging Face.
 
 ## Run it on AWS
 
@@ -37,10 +39,11 @@ no GPU). The 12B model is downloaded from this repo's **GitHub release**, never 
 ```bash
 git clone https://github.com/artyfartymarty/Voice-2-Decisions.git
 cd Voice-2-Decisions/decisions
+mkdir -p models/winnow/gguf          # then copy the model in: see "Get the model onto the instance"
 ./setup.sh
 ```
 
-`setup.sh` checks the GPU and Docker, writes `.env`, downloads Winnow-12B from GitHub (12.7 GB, checked by SHA-256),
+`setup.sh` checks the GPU and Docker, writes `.env`, checks the model file (12.7 GB, size and SHA-256),
 builds both images (Winnow compiles for your GPU, which takes a while the first time), starts them, and replays a demo
 call through the API. Each decision in that output should say `[winnow, p=...]`.
 
@@ -56,25 +59,40 @@ functions have fired, and what the decision model surfaced.
 
 After a reboot: `./setup.sh --skip-build`, or just `docker compose up -d`.
 
-## Put the model on GitHub (once)
+## Get the model onto the instance
 
-GitHub release files must be under 2 GB, so the 12.7 GB GGUF goes up as 7 parts. On any machine that already has
-`Winnow-12B-Q8_0.gguf` and the GitHub CLI logged in:
+The model must end up at exactly this path, with exactly this size and hash:
 
-```bash
-gh auth login
-python decisions/scripts/publish_model.py path/to/Winnow-12B-Q8_0.gguf
+```
+decisions/models/winnow/gguf/Winnow-12B-Q8_0.gguf   12669646592 bytes
+sha256 b710efc4c0d048ee61eed92c5fef5ce323a4d17e7c51f9f0533cc72ae50818ea
 ```
 
-It checks the file's SHA-256, creates the release `models-v1`, and uploads the parts one at a time (needs ~2 GB free
-disk; re-running skips parts that are already up). `scripts/fetch_model.sh` downloads them from
-`https://github.com/artyfartymarty/Voice-2-Decisions/releases/download/models-v1/`, joins them and checks the result.
-To use another repo or tag, set `MODEL_REPO` / `MODEL_TAG` in `.env`. Already copied the file to the instance? Set
-`MODELS_SOURCE=local` and it is only verified.
+**Copy it from your machine (the default, `MODELS_SOURCE=local`).** Nothing is downloaded; `setup.sh` only checks the
+file and stops with `MISSING` or `BAD` (and the expected size and hash) if it's wrong.
 
-Winnow-12B is Apache-2.0 (a Gemma 4 fine-tune by EldanRing), so redistributing it with the license is allowed; the
-release notes carry it. The Winnow server itself is built from `github.com/EldanRing/winnow-inference` at a pinned
-commit.
+```powershell
+# from Windows (PowerShell), wherever your copy of the file is
+scp C:\path\to\Winnow-12B-Q8_0.gguf ubuntu@<instance-public-dns>:Voice-2-Decisions/decisions/models/winnow/gguf/
+```
+
+```bash
+# or via an S3 bucket: upload once from your laptop, then on the instance
+aws s3 cp s3://<bucket>/Winnow-12B-Q8_0.gguf models/winnow/gguf/
+```
+
+Check it any time with `scripts/fetch_model.sh`.
+
+**Or let `setup.sh` download it** by changing `.env`:
+
+| `.env` | Where the file comes from |
+|---|---|
+| `MODELS_SOURCE=local` | you copy it in (default) |
+| `MODELS_SOURCE=url` + `MODEL_URL=https://...` | one download from any direct link: your S3 bucket, a presigned URL, your own server |
+| `MODELS_SOURCE=github` | the parts of a GitHub release (`MODEL_REPO`, `MODEL_TAG`). Release files must be under 2 GB, so someone has to upload it once as 7 parts with `python decisions/scripts/publish_model.py Winnow-12B-Q8_0.gguf` (needs `gh auth login`) |
+
+Every download resumes if interrupted and is checked against the SHA-256 above. Winnow-12B is Apache-2.0 (a Gemma 4
+fine-tune by EldanRing), so copying or re-hosting it with the license is allowed.
 
 ## Send it text
 
@@ -144,4 +162,5 @@ the API while Winnow is loading or if it stops answering.
 | `decider.py` | Winnow-12B `choice` question on `/v1/systemone`, keyword fallback |
 | `server.py`, `console.html` | the HTTP API and the console |
 | `replay.py` | feed a script, Nova events or typed lines |
-| `scripts/fetch_model.sh`, `scripts/publish_model.py` | the model on GitHub releases |
+| `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
+| `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # From a fresh GPU instance to a running, checked service.
 #
-#   ./setup.sh               # check GPU + Docker, write .env, get Winnow-12B from GitHub, build, start, smoke test
+#   ./setup.sh               # check GPU + Docker, write .env, check or fetch Winnow-12B, build, start, smoke test
 #   ./setup.sh --skip-build  # after a reboot: reuse the built images
 #
 # Needs: NVIDIA driver 580+, Docker with the NVIDIA Container Toolkit (the AWS "Deep Learning Base OSS Nvidia Driver
@@ -31,7 +31,7 @@ if [ ! -f .env ]; then cp .env.example .env; echo "wrote .env"; fi
 sed -i "s|^CUDA_ARCH=.*|CUDA_ARCH=$arch|" .env
 echo "CUDA_ARCH=$arch"
 
-step "Winnow-12B from GitHub (12.7 GB the first time, verified by SHA-256)"
+step "Winnow-12B (MODELS_SOURCE in .env; verified by SHA-256)"
 scripts/fetch_model.sh
 
 if [ "${1:-}" != "--skip-build" ]; then
