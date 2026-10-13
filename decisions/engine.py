@@ -26,14 +26,16 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 class Call:
-    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",), normalizer=None,
-                 tail_mode: str = "model"):
+    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",), model=None,
+                 mode: str = "model"):
         self.id = call_id
-        self.extractor, self.decider, self.normalizer = extractor, decider, normalizer
-        # "model": tail numbers come from the external normalizer (Winnow says one was said -> the model writes it ->
-        # format + fleet check). "parser": the deterministic parser in copilot/slots.py. Without a normalizer
+        self.extractor, self.decider, self.model = extractor, decider, model
+        # "model": tail numbers and customer names come from the external model (Winnow says one was said -> the model
+        # pulls it out -> checked against the formats / customers.csv / fleet -> read back). Account numbers said as
+        # digits are still matched directly. "parser": the list matching and tail parser in copilot/. Without a model
         # configured, "model" can't run, so the parser is used.
-        self.tail_by_model = tail_mode == "model" and normalizer is not None
+        self.by_model = mode == "model" and model is not None
+        self._name_hint = False  # this line has something the list matcher took for a customer name
         self.min_p, self.decide_on = min_p, set(decide_on)
         self.variables: dict[str, dict] = {}  # name -> {value, label, confidence, heard, speaker}
         self.tail_slot = slots.new_slot()
@@ -58,7 +60,9 @@ class Call:
         changed, prompts = [], []
         for sentence in (s for s in SENTENCE.split(text) if s.strip()):
             found = self.extractor.extract(sentence)
-            if "customer" in found:
+            if "customer" in found and self.by_model and not re.fullmatch(r"\d+", found["customer"].evidence):
+                self._name_hint = True  # a name: the model reads it (see _model_customer)
+            elif "customer" in found:
                 e = found["customer"]
                 name = self._set("customer_number", e.value, e.label, e.confidence, e.evidence, speaker)
                 changed.append(name)
@@ -73,7 +77,7 @@ class Call:
                         places = [(icao, alias, self.extractor.ref.locations[icao].fbo) for icao, alias in self.extractor.place_names]
                         self._unsure["icao"] = self._candidates(e, places)
             customer = self.variables.get("customer_number", {}).get("value")
-            if self.tail_by_model:
+            if self.by_model:
                 continue
             for ev in slots.update(self.tail_slot, sentence, speaker, self.extractor, customer):
                 if ev["type"] == "validate":
@@ -93,24 +97,41 @@ class Call:
         ranked = sorted(best.items(), key=lambda kv: -kv[1][0])[:top]
         return {"heard": match.evidence, "options": {value: label for value, (score, label) in ranked if score >= 0.3}}
 
+    def _recent(self) -> list[str]:
+        return [f"{l['speaker']}: {l['text']}" for l in self.transcript[-4:-1]]
+
+    def _prompt(self, msg: str, prompts: list[str]):
+        prompts.append(msg)
+        self.prompts.append(msg)
+
+    def _model_customer(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
+        """Winnow says the caller named their company: the model pulls the name out, then it must match customers.csv."""
+        said = self.model.extract("customer", text, self._recent())
+        if not said:
+            return []
+        e = self.extractor.customer(said)
+        if e is None:
+            self._prompt(f"Caller said they're with \"{said}\", which isn't a customer on file. Ask for the account number.", prompts)
+            return []
+        if not self._set("customer_number", e.value, e.label, e.confidence, said, speaker):
+            return []
+        self._prompt(f"Confirm the account: caller said \"{said}\", matched {e.label} ({e.value}).", prompts)
+        return ["customer_number"]
+
     def _normalize_tail(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
-        """Winnow heard a full tail the parser missed: ask the external normalizer, then validate what it returns."""
-        tail = self.normalizer.normalize(text, [f"{l['speaker']}: {l['text']}" for l in self.transcript[-4:-1]])
+        """Winnow says the caller said a full tail: the model writes it out, then it must be valid and on the fleet."""
+        tail = self.model.extract("tail_number", text, self._recent())
         country = extract.registration_country(tail or "")
         if not country:
             return []
         fleet = self.extractor.fleet.get(self.variables.get("customer_number", {}).get("value") or "", set())
         if fleet and tail not in fleet:
-            msg = f"Tail {tail} isn't on file for this customer. Confirm it with the caller."
-            prompts.append(msg)
-            self.prompts.append(msg)
+            self._prompt(f"Tail {tail} isn't on file for this customer. Confirm it with the caller.", prompts)
             return []
         self.tail_slot.update(value=tail, partial="", partial_by="", pending=False)
         if not self._set("tail_number", tail, country, 0.8, text, speaker):
             return []
-        msg = f"Read the tail number back to the caller: {tail}."
-        prompts.append(msg)
-        self.prompts.append(msg)
+        self._prompt(f"Read the tail number back to the caller: {tail}.", prompts)
         return ["tail_number"]
 
     def _settle(self, picks: dict, speaker: str) -> list[str]:
@@ -173,7 +194,7 @@ class Call:
         self.preview = ""
         line = {"speaker": speaker, "text": text.strip(), "at": round(time.time() - self.started, 2)}
         self.transcript.append(line)
-        self._unsure = {}
+        self._unsure, self._name_hint = {}, False
         changed, prompts = self._extract(speaker, line["text"])
         self.prompts += prompts
         fired = self._autocall()
@@ -181,14 +202,22 @@ class Call:
         if speaker in self.decide_on:
             # One model request: what the caller wants, plus which customer / location they meant if the match was fuzzy.
             agent_asked = any(l["speaker"] != speaker and slots.TAIL_TALK.search(l["text"]) for l in self.transcript[-2:-1])
-            ask_tail = (self.normalizer is not None and "tail_number" not in changed
+            ask_tail = (self.by_model and "tail_number" not in changed
                         and bool(slots.TAIL_TALK.search(line["text"]) or agent_asked
                                  or self.tail_slot["pending"] or self.tail_slot["partial"]))
+            # Customer by name: asked until the customer is known, or when the line sounds like a (new) name.
+            ask_customer = self.by_model and "customer_number" not in changed and (
+                "customer_number" not in self.variables or self._name_hint)
             if ask_tail:
                 self._unsure["tail_said"] = True
+            if ask_customer:
+                self._unsure["customer_said"] = {"hint": self._name_hint}
             picked = self.decider.decide(line["text"], self.transcript, self.variables, self._unsure)
-            settled = self._settle(picked.get("variables"), speaker)
-            if ask_tail and (picked.get("variables") or {}).get("tail_said", 0.0) >= self.min_p:
+            said = picked.get("variables") or {}
+            settled = self._settle(said, speaker)
+            if ask_customer and said.get("customer_said", 0.0) >= self.min_p:
+                settled += self._model_customer(line["text"], speaker, prompts)
+            if ask_tail and said.get("tail_said", 0.0) >= self.min_p:
                 settled += self._normalize_tail(line["text"], speaker, prompts)
             if settled:
                 changed += [v for v in settled if v not in changed]

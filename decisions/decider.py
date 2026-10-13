@@ -35,8 +35,15 @@ class RuleDecider:
     name = "rules"
 
     def decide(self, latest: str, recent: list[dict], variables: dict, unsure: dict | None = None) -> dict:
-        # No model to ask "was a full tail said?": when the line is about a tail, let the normalizer try.
-        extra = {"variables": {"tail_said": 1.0}} if (unsure or {}).get("tail_said") else {}
+        # No model to ask "was a tail / a customer name said?": try the extract model when the line is about a tail,
+        # or when the list matcher saw something like a customer name in it.
+        unsure = unsure or {}
+        said = {}
+        if unsure.get("tail_said"):
+            said["tail_said"] = 1.0
+        if unsure.get("customer_said"):
+            said["customer_said"] = 1.0 if unsure["customer_said"].get("hint") else 0.0
+        extra = {"variables": said} if said else {}
         for fn, pattern in RULES:
             if pattern.search(latest):
                 return {"function": fn, "p": 1.0, "by": self.name, **extra}
@@ -77,12 +84,17 @@ class WinnowDecider:
                                     f"{UNSURE_WHAT.get(var, var)} did they mean?",
                     "criteria": {**u["options"], "none": "none of these"},
                 } for var, u in (unsure or {}).items() if isinstance(u, dict) and u.get("options")},
-                # Asked only when a tail-number fallback is configured and the parser found no tail in this line.
+                # Asked only when the extract model is configured (EXTRACT_MODEL_URL): on yes it pulls the value out.
                 **({"tail_said": {
                     "type": "noul",
                     "instructions": "In their latest line, did the caller say a complete aircraft tail number "
                                     "(registration), all of its letters and digits?",
                 }} if (unsure or {}).get("tail_said") else {}),
+                **({"customer_said": {
+                    "type": "noul",
+                    "instructions": "In their latest line, did the caller say the name of the company or customer "
+                                    "account they are calling from or about?",
+                }} if (unsure or {}).get("customer_said") else {}),
             },
         }
 
@@ -111,8 +123,9 @@ class WinnowDecider:
         for key, a in answers.items():
             if key.startswith("which_") and a.get("choice") not in (None, "none"):
                 settled[key[len("which_"):]] = {"value": a["choice"], "p": round(float((a.get("probabilities") or {}).get(a["choice"], 0)), 3)}
-        if "tail_said" in answers:
-            settled["tail_said"] = float(answers["tail_said"].get("noul", 0.0))
+        for flag in ("tail_said", "customer_said"):
+            if flag in answers:
+                settled[flag] = float(answers[flag].get("noul", 0.0))
         return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, answer.get("confidence", 0.0)), 3),
                 "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name, "variables": settled,
                 "ms": round((time.perf_counter() - t0) * 1000)}

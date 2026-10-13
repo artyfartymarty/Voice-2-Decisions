@@ -145,9 +145,21 @@ class Engine(unittest.TestCase):
         self.assertEqual([f["function"] for f in out["fired"]][0], "fuel_quote")
 
 
+class FakeModel:
+    """Stands in for the external extract model; records which kinds it was asked for."""
+
+    def __init__(self, **answers):
+        self.answers, self.asked = answers, []
+
+    def extract(self, kind, text, recent):
+        self.asked.append(kind)
+        return self.answers.get(kind)
+
+
 class FakeWinnow(BaseHTTPRequestHandler):
     pick = "fuel_quote"
     tail_said = 0.9
+    customer_said = 0.9
     which = {}  # "which_customer_number" -> the option to pick (default: the first, i.e. the fuzzy match)
     seen = []
 
@@ -161,8 +173,9 @@ class FakeWinnow(BaseHTTPRequestHandler):
             if qid.startswith("which_"):
                 pick = self.which.get(qid, next(iter(q["criteria"])))
                 answers[qid] = {"type": "choice", "choice": pick, "probabilities": {k: 0.9 if k == pick else 0.02 for k in q["criteria"]}}
-        if "tail_said" in body["questions"]:
-            answers["tail_said"] = {"type": "noul", "noul": self.tail_said}
+        for flag in ("tail_said", "customer_said"):
+            if flag in body["questions"]:
+                answers[flag] = {"type": "noul", "noul": getattr(self, flag)}
         out = json.dumps({"answers": answers}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(out)))
@@ -225,52 +238,76 @@ class Winnow(unittest.TestCase):
         self.assertEqual(call.variables["customer_number"]["value"], "377205")
         self.assertEqual(out["decision"]["result"]["customer_number"], "377205")
 
-    def test_tail_fallback_normalizer(self):
-        class Normalizer:  # stands in for the external model; records what it was asked
-            def __init__(self, answer):
-                self.answer, self.asked = answer, []
-
-            def normalize(self, text, recent):
-                self.asked.append(text)
-                return self.answer
-
-        # The parser can't read "one two three ay bee"; Winnow says a full tail was said; the normalizer reads it.
-        norm = Normalizer("N123AB")
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm)
+    def test_tail_from_the_extract_model(self):
+        # The parser can't read "one two three ay bee"; Winnow says a full tail was said; the model writes it.
+        model = FakeModel(tail_number="N123AB")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
         call.feed("caller", "The tail is one two three ay bee.")
         self.assertIn("tail_said", FakeWinnow.seen[-1]["questions"])
         self.assertEqual(call.variables["tail_number"]["value"], "N123AB")
-        self.assertEqual(len(norm.asked), 1)
 
         # Model is the main path: even a tail the parser could read goes to the model, and the agent reads it back.
-        norm = Normalizer("N88NW")
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm)
+        model = FakeModel(tail_number="N88NW")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
         out = call.feed("caller", "Tail number November eight eight November whiskey.")
         self.assertEqual(call.variables["tail_number"]["value"], "N88NW")
-        self.assertEqual(len(norm.asked), 1)
         self.assertIn("Read the tail number back", out["prompts"][-1])
         # Not asked when Winnow says no full tail was said.
         FakeWinnow.tail_said = 0.1
         try:
-            Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm).feed("caller", "The tail is one two three.")
+            Call("t", EXTRACTOR, WinnowDecider(self.url), model=model).feed("caller", "The tail is one two three.")
         finally:
             FakeWinnow.tail_said = 0.9
-        self.assertEqual(len(norm.asked), 1)
-        # TAIL_MODE=parser: the parser reads it and the model isn't asked.
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm, tail_mode="parser")
+        self.assertEqual(model.asked.count("tail_number"), 1)
+        # EXTRACT_MODE=parser: the parser reads it and the model isn't asked.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model, mode="parser")
         call.feed("caller", "Tail number November eight eight November whiskey.")
         self.assertNotIn("tail_said", FakeWinnow.seen[-1]["questions"])
-        self.assertEqual(len(norm.asked), 1)
+        self.assertEqual(model.asked.count("tail_number"), 1)
 
         # Its answer is validated: not a registration, or not on the customer's fleet -> not used.
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=Normalizer("HELLO1"))
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(tail_number="HELLO1"))
         call.feed("caller", "The tail is one two three ay bee.")
         self.assertNotIn("tail_number", call.variables)
-        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=Normalizer("N123AB"))
-        call.feed("caller", "Northwind, account 204511.")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(tail_number="N123AB"))
+        call.feed("caller", "Account 204511.")
         out = call.feed("caller", "The tail is one two three ay bee.")
         self.assertNotIn("tail_number", call.variables)
         self.assertIn("isn't on file", out["prompts"][-1])
+
+    def test_customer_name_from_the_extract_model(self):
+        model = FakeModel(customer="Blue Herring Jet Charter")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
+        out = call.feed("caller", "Hi, it's Priya from Blue Herring Jet Charter.")
+        self.assertIn("customer_said", FakeWinnow.seen[-1]["questions"])
+        self.assertEqual(call.variables["customer_number"]["value"], "318842")  # matched against customers.csv
+        self.assertIn("Confirm the account", out["prompts"][-1])
+        self.assertEqual(model.asked.count("customer"), 1)
+        # Known customer, no new name: not asked again.
+        call.feed("caller", "We need fuel on Friday.")
+        self.assertNotIn("customer_said", FakeWinnow.seen[-1]["questions"])
+
+        # An account number said as digits is still matched directly, with no model call.
+        model = FakeModel(customer="should not be asked")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=model)
+        call.feed("caller", "Account 204511.")
+        self.assertEqual(call.variables["customer_number"]["value"], "204511")
+        self.assertEqual(model.asked, [])
+
+        # A name that isn't on file is not committed; the agent asks for the account number.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Acme Rockets"))
+        out = call.feed("caller", "This is Sam from Acme Rockets.")
+        self.assertNotIn("customer_number", call.variables)
+        self.assertIn("isn't a customer on file", out["prompts"][-1])
+
+        # Winnow says no name was said: the model isn't asked.
+        FakeWinnow.customer_said = 0.1
+        try:
+            model = FakeModel(customer="Northwind Aviation")
+            Call("t", EXTRACTOR, WinnowDecider(self.url), model=model).feed("caller", "Hi, I need some fuel.")
+        finally:
+            FakeWinnow.customer_said = 0.9
+        self.assertEqual(model.asked, [])
 
     def test_unreachable_winnow_falls_back_to_rules(self):
         call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))

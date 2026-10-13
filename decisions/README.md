@@ -152,12 +152,14 @@ the API while Winnow is loading or if it stops answering.
 - **Real data:** put `customers.csv`, `location_notes.csv` (and optionally `disputes.csv`, `fleet.csv`,
   `airport_aliases.csv`) in `decisions/reference`, uncomment the volume in `docker-compose.yml`, set
   `REFERENCE_DIR=/reference`.
-- **Tail numbers:** set `TAIL_NORMALIZER_URL` (and `TAIL_NORMALIZER_MODEL` for an OpenAI-compatible endpoint) to the
-  model that writes tail numbers. When a caller line is about a tail (or answers the agent asking for one), the same
-  Winnow request asks "did the caller just say a complete tail number?"; on yes, that line goes to the model, its
-  answer must be a valid registration and, if the customer has a fleet on file, one of their tails, and the agent is
-  prompted to read it back. Without `TAIL_NORMALIZER_URL`, or with `TAIL_MODE=parser`, the built-in parser reads tails
-  instead (see Notes). See `normalizer.py`.
+- **Tail numbers and customer names:** set `EXTRACT_MODEL_URL` (and `EXTRACT_MODEL` for an OpenAI-compatible
+  endpoint) to the model that pulls them out. On each caller line the same Winnow request asks "did the caller just say
+  a complete tail number?" (when the line is about a tail, or answers the agent asking for one) and "did they name
+  their company?" (until the customer is known, or when the line sounds like a new name). On yes, that line goes to the
+  model. A tail must then be a valid registration and, if the customer has a fleet on file, one of their tails; a name
+  must match a customer in `customers.csv`. Either way the agent is prompted to read it back. Account numbers said as
+  digits are still matched directly. Without `EXTRACT_MODEL_URL`, or with `EXTRACT_MODE=parser`, the built-in list
+  matching and tail parser are used instead (see Notes). See `model_extract.py`.
 - **How sure Winnow must be:** `DECIDE_MIN_P` (default 0.5).
 - **Fuzzy names:** customer and location are matched against the reference lists first. When a match came from a heard
   name rather than an exact code or account number, the same Winnow request also asks "which customer / airport did
@@ -169,17 +171,17 @@ the API while Winnow is loading or if it stops answering.
 | `events.py` | Nova Sonic / plain events -> (speaker, text, final) |
 | `engine.py` | one call: variables, auto-calling, decisions |
 | `functions.py` | the functions and the variables they need |
-| `normalizer.py` | the external model that writes tail numbers |
+| `model_extract.py` | the external model that writes tail numbers |
 | `decider.py` | Winnow-12B `choice` question on `/v1/systemone`, keyword fallback |
 | `server.py`, `console.html` | the HTTP API and the console |
 | `replay.py` | feed a script, Nova events or typed lines |
 | `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
 
-## Tail numbers with GPT 6 Luna on Bedrock
+## GPT 6 Luna on Bedrock for tails and names
 
-GPT 6 Luna is on Amazon Bedrock with an OpenAI-compatible Chat Completions endpoint, so the tail model needs no extra
-code: point the four settings below at it. (Sources: the Bedrock
+GPT 6 Luna is on Amazon Bedrock with an OpenAI-compatible Chat Completions endpoint, so the extract model needs no extra
+code: point the settings below at it. The same model and settings serve tail numbers and customer names. (Sources: the Bedrock
 [GPT-6 Luna model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html),
 [Chat Completions on Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html),
 [API key permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-permissions.html).)
@@ -221,29 +223,29 @@ give it an expiry). It goes in `.env` only; `.env` is git-ignored.
 **4. Set `.env`** and restart (`docker compose up -d`):
 
 ```
-TAIL_MODE=model
-TAIL_NORMALIZER_URL=https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
-TAIL_NORMALIZER_MODEL=us.openai.gpt-6-luna
-TAIL_NORMALIZER_API_KEY=<your Bedrock API key>
-TAIL_NORMALIZER_REASONING=none
-TAIL_NORMALIZER_TIMEOUT=3
+EXTRACT_MODE=model
+EXTRACT_MODEL_URL=https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+EXTRACT_MODEL=us.openai.gpt-6-luna
+EXTRACT_MODEL_API_KEY=<your Bedrock API key>
+EXTRACT_MODEL_REASONING=none
+EXTRACT_MODEL_TIMEOUT=3
 ```
 
-Change the Region in the URL to yours. `TAIL_NORMALIZER_REASONING=none` asks Luna not to reason first (its default is
-`medium`), which is what keeps one tail number fast; the request sends `max_completion_tokens` and no temperature.
+Change the Region in the URL to yours. `EXTRACT_MODEL_REASONING=none` asks Luna not to reason first (its default is
+`medium`), which is what keeps each call fast; the request sends `max_completion_tokens` and no temperature.
 
 **5. Check it** without a call in progress:
 
 ```bash
 curl -s https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions \
-  -H "Authorization: Bearer $TAIL_NORMALIZER_API_KEY" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $EXTRACT_MODEL_API_KEY" -H "Content-Type: application/json" \
   -d '{"model":"us.openai.gpt-6-luna","reasoning_effort":"none","max_completion_tokens":16,
        "messages":[{"role":"user","content":"Write this aircraft registration with no dashes: November eight eight November whiskey"}]}'
 ```
 
-Then type `caller: tail number November eight eight November whiskey` in the console: the variable fills and the agent
-gets "Read the tail number back". If the call fails, the API logs Bedrock's reason (`docker compose logs api`), and the
-tail is simply not filled from that line.
+Then type `caller: Hi, this is Dana with Northwind Aviation` and `caller: tail number November eight eight November
+whiskey` in the console: the variables fill and the agent gets "Confirm the account" and "Read the tail number back". If the call fails, the API logs Bedrock's reason (`docker compose logs api`), and that
+variable is simply not filled from that line.
 
 Not done here: SigV4 signing with the EC2 instance role instead of an API key (the API container is standard-library
 only); `bedrock-mantle` (us-east-1 only, `.../openai/v1` on `bedrock-mantle.us-east-1.api.aws`, base model ID
@@ -252,9 +254,13 @@ from here; it follows the AWS docs above.
 
 ## Notes: omitted for now
 
-- **Tail numbers go to the external model, not the parser.** The deterministic tail parser (`copilot/slots.py`:
-  phonetic alphabet, aviation digits, "one twenty three", a dropped "November", tails over several breaths) is not the
-  main path. It is used only with `TAIL_MODE=parser` or when no `TAIL_NORMALIZER_URL` is set.
+- **Tail numbers and customer names go to the external model, not the parser.** The deterministic tail parser
+  (`copilot/slots.py`: phonetic alphabet, aviation digits, "one twenty three", a dropped "November", tails over several
+  breaths) and the fuzzy customer-name matcher (`copilot/extract.py`: "Blue Herring" -> Blue Heron) are not the main
+  path. They are used only with `EXTRACT_MODE=parser` or when no `EXTRACT_MODEL_URL` is set. On the main path the
+  matcher only checks the model's answer against `customers.csv`; account numbers said as digits still match directly.
 - **No special handling of mid-tail corrections** ("forget the November, I meant tango", "scratch that") on the main
-  path: the model sees the caller's line and the few before it and is trusted to resolve them; the format and fleet
-  checks and the agent's read-back are the safety net. (The parser handles them when it's in use, and its tests stay.)
+  path: the model sees the caller's line and the few before it and is trusted to resolve them; the format, fleet and
+  customer-list checks and the agent's read-back are the safety net. (The parser handles them when it's in use, and
+  its tests stay.)
+- **Locations** still come from list matching (ICAO / IATA / FBO / airport names), with Winnow settling fuzzy matches.
