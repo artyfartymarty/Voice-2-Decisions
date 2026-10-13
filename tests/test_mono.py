@@ -4,7 +4,7 @@ import json
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from copilot import reference
+from copilot import extract
 from copilot.diarize import Turn, clean_turns
 from copilot.pipeline import _split_chunk_by_turns
 from copilot.roles import infer_roles
@@ -21,7 +21,7 @@ SCRIPT = [AGENT_1, CALLER_1, AGENT_2, CALLER_2, AGENT_3]
 # --- roles ---
 
 def test_roles_from_content():
-    info = infer_roles([("speaker 1", AGENT_1), ("speaker 2", CALLER_1), ("speaker 1", AGENT_2)], reference.get())
+    info = infer_roles([("speaker 1", AGENT_1), ("speaker 2", CALLER_1), ("speaker 1", AGENT_2)], extract.get())
     assert info["roles"] == {"speaker 1": "agent", "speaker 2": "caller"}
     assert info["confident"]
 

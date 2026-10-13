@@ -5,11 +5,25 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
-from . import pipeline, tools
+from . import extract, pipeline, tools
 from .asr import get_backend
 from .diarize import get_diarizer
 from .audio import AudioDecodeError
 from .models import Call
+
+
+def _prefill(data) -> dict:
+    """Customer known before anyone speaks: from the telephony system's customer_id (or ANI lookup upstream).
+
+    Pre-filled customers make quote_lookup fire as soon as a location and a price question come up, and let the
+    tail-number slot check the customer's fleet.
+    """
+    number = str(data.get("customer_id", "") or "").strip()
+    ctx = {"ani": str(data.get("ani", "") or "")[:32]} if data.get("ani") else {}
+    name = extract.get().customers.get(number, (None,))[0] if number else None
+    if name:
+        ctx.update(customer=number, customer_name=name, customer_source="prefill")
+    return ctx
 
 
 def _speakers(request) -> list[str]:
@@ -25,7 +39,7 @@ def index(request):
         legs = [f.read() for f in (request.FILES.get("audio"), request.FILES.get("audio_b")) if f]
         if not legs:
             return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50], "error": "Choose an audio file."}, status=400)
-        call = Call.objects.create(title=request.POST.get("title", "")[:200])
+        call = Call.objects.create(title=request.POST.get("title", "")[:200], context=_prefill(request.POST))
         pipeline.process_recording(call, legs, _speakers(request))
         return redirect("call_detail", pk=call.pk)
     return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50]})
@@ -71,7 +85,7 @@ def api_calls(request):
     legs = [f.read() for f in (request.FILES.get("audio"), request.FILES.get("audio_b")) if f]
     if not legs:
         return JsonResponse({"error": "send an 'audio' file (and optionally 'audio_b' for the second leg)"}, status=400)
-    call = Call.objects.create(title=request.POST.get("title", "")[:200])
+    call = Call.objects.create(title=request.POST.get("title", "")[:200], context=_prefill(request.POST))
     pipeline.process_recording(call, legs, _speakers(request))
     return JsonResponse(pipeline.call_payload(call), status=201 if call.status == "done" else 422)
 
@@ -80,7 +94,7 @@ def api_calls(request):
 @require_POST
 def api_live_start(request):
     body = json.loads(request.body or b"{}") if request.content_type == "application/json" else request.POST
-    call = Call.objects.create(title=str(body.get("title", ""))[:200], status="live")
+    call = Call.objects.create(title=str(body.get("title", ""))[:200], status="live", context=_prefill(body))
     return JsonResponse(pipeline.call_payload(call), status=201)
 
 
@@ -109,6 +123,12 @@ def api_partial(request, pk):
         return JsonResponse({"error": str(exc)}, status=400)
     return JsonResponse({"new_moments": [m.as_dict() for m in new], "pending_text": call.pending_text,
                          "status": call.status, "speakers": call.roles})
+
+
+@require_GET
+def api_boost_words(request):
+    """Phrases to bias the ASR toward (customer names, FBOs, airports, codes), built from the reference data."""
+    return JsonResponse({"phrases": extract.get().boost_words()})
 
 
 @require_GET

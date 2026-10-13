@@ -8,12 +8,17 @@ Each finished sentence is scored against rule sets for five kinds of moment:
     question     "can you confirm the start date?"
     key_moment   prices, budgets, deadlines, cancellations
 
-On top of those, Winnower tracks the call as a whole (customer, location, whether a quote was asked for,
-rolling sentiment) against the reference data in reference.py, and raises three use-case moments:
+On top of those, Winnower tracks the call as a whole (customer, location, tail number, whether a quote was
+asked for, rolling sentiment) and raises the use-case moments:
 
     quote_request    a quote is wanted and both customer and location are known  -> quote_lookup
     dispute_risk     a quote is wanted at a location with a dispute history       -> dispute_guidance
     sentiment_shift  the conversation turns negative                              -> alert_manager
+    tail_number      a complete, confident registration (see slots.py)            -> validate_tail_number
+    agent_prompt     something the agent should confirm (e.g. a cut-off tail)     -> prompt_agent
+
+winnow decides *which* tool fires; the tool arguments (customer number, ICAO, tail number) come from the
+deterministic extractor in extract.py, so they are always values from the reference data or a strict grammar.
 
 Every moment carries the tool call it maps to (see tools.py and usecases.py), so downstream code can act on it.
 Winnower keeps state between partial transcripts: it only judges sentences once they end,
@@ -22,8 +27,10 @@ holds the unfinished tail until more text arrives, and never reports the same se
 import re
 from dataclasses import asdict, dataclass, field
 
+from . import slots
+
 KINDS = ("decision", "action_item", "risk", "question", "key_moment")
-USE_CASE_KINDS = ("quote_request", "dispute_risk", "sentiment_shift")
+USE_CASE_KINDS = ("quote_request", "dispute_risk", "sentiment_shift", "tail_number", "agent_prompt")
 ALL_KINDS = KINDS + USE_CASE_KINDS
 
 TOOL_FOR_KIND = {
@@ -35,6 +42,8 @@ TOOL_FOR_KIND = {
     "quote_request": "quote_lookup",
     "dispute_risk": "dispute_guidance",
     "sentiment_shift": "alert_manager",
+    "tail_number": "validate_tail_number",
+    "agent_prompt": "prompt_agent",
 }
 
 _I = re.IGNORECASE
@@ -183,8 +192,8 @@ def _norm(sentence: str) -> str:
 
 
 def new_context() -> dict:
-    return {"customer": None, "customer_name": None, "icao": None, "quote_intent": False,
-            "quoted": [], "dispute_warned": [], "recent": {}, "alerted": {}}
+    return {"customer": None, "customer_name": None, "icao": None, "tail_number": None, "quote_intent": False,
+            "quoted": [], "dispute_warned": [], "tail": slots.new_slot(), "recent": {}, "alerted": {}}
 
 
 class Winnower:
@@ -195,11 +204,13 @@ class Winnower:
     """
 
     def __init__(self, pending: str = "", seen: set[str] | None = None, context: dict | None = None,
-                 reference=None, sentiment_window: int = 3, sentiment_alert_at: float = -0.4, dispute_min_count: int = 1):
+                 reference=None, sentiment_window: int = 3, sentiment_alert_at: float = -0.4, dispute_min_count: int = 1,
+                 extractor=None):
         self.pending = pending
         self.seen = set(seen or ())
         self.context = {**new_context(), **(context or {})}
         self._reference = reference
+        self._extractor = extractor
         self.sentiment_window = sentiment_window
         self.sentiment_alert_at = sentiment_alert_at
         self.dispute_min_count = dispute_min_count
@@ -211,14 +222,30 @@ class Winnower:
             self._reference = reference.get()
         return self._reference
 
+    @property
+    def extractor(self):
+        if self._extractor is None:
+            from . import extract
+            self._extractor = extract.get()
+        return self._extractor
+
     def _use_cases(self, clause: str, start, end, speaker: str = "") -> list[Moment]:
         ctx, out = self.context, []
-        found = self.reference.find_customer(clause)
-        if found:
-            ctx["customer"], ctx["customer_name"] = found
-        icao = self.reference.find_location(clause)
-        if icao:
-            ctx["icao"] = icao
+        found = self.extractor.extract(clause)
+        if "customer" in found:
+            ctx["customer"], ctx["customer_name"] = found["customer"].value, found["customer"].label
+        if "location" in found:
+            ctx["icao"] = found["location"].value
+        for event in slots.update(ctx["tail"], clause, speaker, self.extractor, ctx["customer"]):
+            if event["type"] == "validate":
+                ctx["tail_number"] = event["tail_number"]
+                out.append(Moment("tail_number", clause, event["confidence"], start, end, speaker=speaker,
+                                  args={k: event[k] for k in ("tail_number", "country", "confidence", "heard", "how", "replaces")}
+                                  | {"customer_number": ctx["customer"]}))
+            else:
+                out.append(Moment("agent_prompt", clause, 0.7, start, end, speaker=speaker,
+                                  args={"message": event["message"], "about": "tail_number",
+                                        "suggestion": event.get("suggestion")}))
         if QUOTE_INTENT.search(clause):
             ctx["quote_intent"] = True
 
@@ -297,4 +324,6 @@ def summarize(moments: list[dict]) -> dict:
         "quotes": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["quote_request"]],
         "dispute_warnings": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["dispute_risk"]],
         "sentiment_alerts": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["sentiment_shift"]],
+        "tail_numbers": [m.get("tool_result") or m["tool_call"]["args"] for m in by_kind["tail_number"]],
+        "agent_prompts": [m["tool_call"]["args"]["message"] for m in by_kind["agent_prompt"]],
     }

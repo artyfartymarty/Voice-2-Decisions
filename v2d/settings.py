@@ -76,6 +76,8 @@ REFERENCE_DIR = Path(os.environ.get("REFERENCE_DIR") or BASE_DIR / "fixtures" / 
 # Sentiment alert: fire when the average of the last SENTIMENT_WINDOW scored sentences drops to SENTIMENT_ALERT_AT or below.
 SENTIMENT_WINDOW = int(os.environ.get("SENTIMENT_WINDOW", "3"))
 SENTIMENT_ALERT_AT = float(os.environ.get("SENTIMENT_ALERT_AT", "-0.4"))
+# validate_tail_number fires only for tail numbers extracted with at least this confidence.
+TAIL_MIN_CONFIDENCE = float(os.environ.get("TAIL_MIN_CONFIDENCE", "0.8"))
 # Dispute guidance fires for locations with at least this many disputes in their private notes.
 DISPUTE_MIN_COUNT = int(os.environ.get("DISPUTE_MIN_COUNT", "3"))
 # Optional: alerts (dispatcher, managers) are POSTed here as JSON, e.g. a Slack or Teams incoming webhook.

@@ -88,6 +88,27 @@ def dispute_guidance(text, icao, at=None):
 
 
 @tool()
+def validate_tail_number(text, tail_number, country="", confidence=0.0, heard="", customer_number=None, how="heard",
+                         replaces=None, at=None):
+    """Format, registry country and (when fleet.csv has the customer) whether the customer operates this tail."""
+    from . import extract
+
+    fleet = extract.get().fleet.get(customer_number or "")
+    on_file = (tail_number in fleet) if fleet else None
+    note = ("On file for this customer." if on_file else "Not on file for this customer. Confirm it." if fleet
+            else "Format valid. No fleet on file for this customer, so ownership isn't checked.")
+    return {"tail_number": tail_number, "country": country, "valid_format": True, "confidence": confidence,
+            "heard": heard, "how": how, "replaces": replaces, "customer_number": customer_number, "on_file": on_file,
+            "note": note}
+
+
+@tool()
+def prompt_agent(text, message, about="", suggestion=None, at=None):
+    """Something the agent should confirm on the call; shown on the call page and returned by the API."""
+    return {"message": message, "about": about, "suggestion": suggestion}
+
+
+@tool()
 def alert_manager(text, avg_sentiment, recent=(), speaker="", at=None):
     who = f"the {speaker}'s" if speaker else "the"
     message = f"Negative sentiment shift in {who} side of a live call (avg {avg_sentiment:+.2f}): \"{text}\""

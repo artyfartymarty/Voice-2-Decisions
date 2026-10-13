@@ -5,8 +5,7 @@ Two flat files in REFERENCE_DIR (synthetic copies in fixtures/reference/; point 
     customers.csv       CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
     location_notes.csv  ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (HTML)
 
-Also finds customers and locations mentioned in transcript text, allowing for how ASR writes them
-("Northwind Aviation" for "NORTHWIND AVIATION, LLC", "K T E B" or "TEB" for KTEB).
+Finding customers, locations and tail numbers in speech lives in extract.py.
 """
 import csv
 import html
@@ -17,15 +16,10 @@ from pathlib import Path
 
 from django.conf import settings
 
-SUFFIXES = re.compile(r"\b(inc|llc|ltd|corp|co|company|corporation|limited|plc|gmbh|sa)\b\.?", re.IGNORECASE)
 DISPUTE_WORDS = re.compile(r"\b(disputes?|disputed|chargebacks?|billing complaints?)\b", re.IGNORECASE)
 NOTE_BREAK = re.compile(r"\n|•|\||;|(?<!\d)\.(?!\d)")  # a period inside $1.10 is not a break
 FEE_WORD = re.compile(r"\bfees?\b", re.IGNORECASE)
 COUNT = re.compile(r"\b(\d+)\b(?!\s*(?:months?|hrs?|hours?|days?|years?|yrs?|gal|%))", re.IGNORECASE)
-
-
-def squash(text: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def html_to_text(raw: str) -> str:
@@ -98,35 +92,6 @@ class Reference:
 
     def sites_for(self, customer_number: str) -> list[CustomerSite]:
         return [s for s in self.sites if s.customer_number == customer_number]
-
-    # --- finding mentions in transcript text ---
-    def find_customer(self, text: str) -> tuple[str, str] | None:
-        """(customer_number, customer_name) mentioned in text, by number or by name."""
-        digits = re.sub(r"[^0-9 ]", "", text)
-        squashed = squash(text)
-        for number, name in self.customer_numbers().items():
-            if re.search(rf"\b{number}\b", digits) or number in squashed:
-                return number, name
-        best = None
-        for number, name in self.customer_numbers().items():
-            core = squash(SUFFIXES.sub("", name))
-            if len(core) >= 5 and core in squashed and (best is None or len(core) > best[2]):
-                best = (number, name, len(core))
-        return (best[0], best[1]) if best else None
-
-    def find_location(self, text: str) -> str | None:
-        """ICAO code of a location mentioned by ICAO (also spelled out), IATA, or FBO name."""
-        spelled = re.sub(r"\b([A-Za-z])[\s.-](?=[A-Za-z]\b)", r"\1", text)  # "K T E B" / "K-T-E-B" -> "KTEB"
-        tokens = {t.upper() for t in re.findall(r"\b[A-Za-z]{3,4}\b", spelled)}
-        upper_tokens = set(re.findall(r"\b[A-Z]{3}\b", text))  # IATA only when written in capitals
-        squashed = squash(text)
-        for icao, loc in self.locations.items():
-            if icao in tokens or (loc.iata and loc.iata in upper_tokens):
-                return icao
-            fbo_core = squash(re.sub(r"\b(fbo|aviation|services|center|centre|executive|handling)\b", "", loc.fbo, flags=re.IGNORECASE))
-            if len(fbo_core) >= 6 and fbo_core in squashed:
-                return icao
-        return None
 
 
 def load(directory: str | Path) -> Reference:

@@ -34,7 +34,7 @@ def cue_scores(text: str) -> tuple[float, float]:
     return agent, caller
 
 
-def infer_roles(turns: list[tuple[str, str]], reference=None) -> dict:
+def infer_roles(turns: list[tuple[str, str]], extractor=None) -> dict:
     """turns: (speaker, text) in time order -> {"roles": {speaker: role}, "scores": {...}, "confident": bool}.
 
     With two or more speakers, the one with the strongest agent-minus-caller evidence is the agent, the most
@@ -46,7 +46,7 @@ def infer_roles(turns: list[tuple[str, str]], reference=None) -> dict:
     scores = {s: [0.0, 0.0] for s in speakers}
     for s, text in turns:
         a, c = cue_scores(text)
-        if reference is not None and reference.find_customer(text):
+        if extractor is not None and extractor.customer(text):
             c += 2.0  # naming the customer company or account number is what callers do
         scores[s][0] += a
         scores[s][1] += c

@@ -7,6 +7,7 @@ urlpatterns = [
     path("calls/<int:pk>/", views.call_detail, name="call_detail"),
     path("healthz", views.healthz, name="healthz"),
     path("api/calls/", views.api_calls, name="api_calls"),
+    path("api/boost-words/", views.api_boost_words, name="api_boost_words"),
     path("api/calls/live/", views.api_live_start, name="api_live_start"),
     path("api/calls/<int:pk>/", views.api_call, name="api_call"),
     path("api/calls/<int:pk>/partial/", views.api_partial, name="api_partial"),

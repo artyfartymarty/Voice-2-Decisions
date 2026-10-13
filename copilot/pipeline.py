@@ -11,7 +11,7 @@ import numpy as np
 from django.conf import settings
 from django.db import transaction
 
-from . import audio, reference, tools
+from . import audio, extract, tools
 from .asr import get_backend
 from .audio import TARGET_SR
 from .diarize import close_live_session, get_diarizer, live_session
@@ -71,7 +71,7 @@ def _transcribe_span(samples: np.ndarray, start: float, end: float, speaker: str
 def _roles_for(pieces: list[Piece], fixed: dict | None = None) -> dict:
     if fixed is not None:
         return {"roles": fixed, "scores": {}, "confident": True, "source": "legs"}
-    info = infer_roles([(p.speaker, p.text) for p in pieces if p.speaker], reference.get())
+    info = infer_roles([(p.speaker, p.text) for p in pieces if p.speaker], extract.get())
     info["source"] = "diarization"
     return info
 
@@ -204,7 +204,7 @@ def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None
             call.context = {**call.context, "last_speaker": pieces[-1].speaker}
         all_turns = [(s.speaker, s.text) for s in call.segments.all()] + [(p.speaker, p.text) for p in pieces]
         if any(s for s, _ in all_turns):
-            info = infer_roles([t for t in all_turns if t[0]], reference.get())
+            info = infer_roles([t for t in all_turns if t[0]], extract.get())
             info["source"] = "diarization" if audio_bytes and get_diarizer() else "client"
             call.context["roles"] = info
         roles = call.context.get("roles", {}).get("roles", {})

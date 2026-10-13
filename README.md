@@ -35,6 +35,24 @@ Reference data comes from two flat files in `REFERENCE_DIR`, which uses the same
 `fixtures/reference/` holds **synthetic** samples in those shapes; none of it is real customer data. Alerts are
 logged, and also POSTed to `NOTIFY_WEBHOOK_URL` when that is set, for example a Slack or Teams webhook.
 
+## Tool arguments without an LLM
+
+The decider only picks *which* tool fires. The arguments come from `copilot/extract.py` and `copilot/slots.py`,
+which are deterministic, about 2.5 ms p95 per update on CPU, and can only return values from the reference data or
+a strict grammar:
+
+- **Customers:** account numbers (written or spoken digit by digit) or names, matched fuzzily and phonetically
+  against customers.csv ("North Wind aviation" → NORTHWIND AVIATION, LLC). They can also be pre-filled at call
+  start with `customer_id` (from the phone system's ANI lookup).
+- **Locations:** ICAO and IATA codes, also spelled ("K T E B") or in the phonetic alphabet. FBO names come from
+  the notes; airport and city names come from `airport_aliases.csv`, fuzzy ("Teeterborough" → KTEB).
+- **Tail numbers:** registration grammar per country, with phonetic alphabet and spoken digits ("November five one
+  two bravo tango" → N512BT). A per-call slot handles cut-offs, re-asks ("sorry, what was the tail again?"),
+  spelling spread over several breaths, and corrections ("no, B T, not B D"). `validate_tail_number` fires only
+  for a complete, confident value, or one found in the customer's fleet (`fleet.csv`). Anything less becomes an
+  **agent prompt** ("Tail number incomplete, ask the caller to repeat it. On file: N512BT").
+- **Word boost:** `GET /api/boost-words/` lists the same names and codes, to feed the ASR's word-boost list.
+
 ## Quick start (Docker, GPU)
 
 ```bash

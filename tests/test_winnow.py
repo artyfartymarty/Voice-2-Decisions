@@ -101,7 +101,8 @@ def test_summary():
     s = summarize(moments)
     assert s["headline"] == "We decided to go with the annual plan."
     assert s["counts"] == {"decision": 1, "action_item": 1, "risk": 1, "question": 1, "key_moment": 1,
-                           "quote_request": 0, "dispute_risk": 0, "sentiment_shift": 0}
+                           "quote_request": 0, "dispute_risk": 0, "sentiment_shift": 0,
+                           "tail_number": 0, "agent_prompt": 0}
     assert s["action_items"][0]["owner"] == "Sarah"
 
 

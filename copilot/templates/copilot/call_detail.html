@@ -28,6 +28,10 @@
         {% else %}{{ r.customer }} at {{ r.icao }}: {{ r.note }}{% endif %}</div>
       {% elif m.kind == "dispute_risk" %}
         <div class="prompt"><b>{{ r.prompt_agent }}</b><br>Add to quote: “{{ r.quote_wording }}”</div>
+      {% elif m.kind == "tail_number" %}
+        <div class="prompt">Tail <b>{{ r.tail_number }}</b> ({{ r.country }}, confidence {{ r.confidence }}){% if m.tool_args.how == "corrected" %}, corrected from {{ m.tool_args.replaces }}{% endif %}. {{ r.note }}</div>
+      {% elif m.kind == "agent_prompt" %}
+        <div class="prompt"><b>Ask the caller:</b> {{ r.message }}</div>
       {% elif m.kind == "sentiment_shift" %}
         <div class="prompt">Managers alerted: {% if r.speaker %}{{ r.speaker }} {% endif %}sentiment {{ r.avg_sentiment }} over the last few lines.</div>
       {% endif %}

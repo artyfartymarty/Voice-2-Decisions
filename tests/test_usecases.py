@@ -41,31 +41,6 @@ def test_reference_parses_messy_html_notes():
     assert ref.locations["KVNY"].dispute_count == 0
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("this is Dana from Northwind Aviation", "204511"),
-    ("account 204511 calling", "204511"),
-    ("account 2 0 4 5 1 1", "204511"),
-    ("Blue Heron Jet Charter here", "318842"),
-    ("just a general question", None),
-])
-def test_find_customer(text, expected):
-    found = reference.get().find_customer(text)
-    assert (found[0] if found else None) == expected
-
-
-@pytest.mark.parametrize("text,expected", [
-    ("arriving at KTEB", "KTEB"),
-    ("arriving at K T E B Thursday", "KTEB"),
-    ("arriving at K-T-E-B", "KTEB"),
-    ("fuel at TEB please", "KTEB"),
-    ("parking at Meadowlark Jet Center", "KTEB"),
-    ("Le Bourget, LFPB", "LFPB"),
-    ("the best rate you have", None),
-])
-def test_find_location(text, expected):
-    assert reference.get().find_location(text) == expected
-
-
 # --- winnow raising use-case moments ---
 
 def test_quote_call_raises_all_three_use_cases():
