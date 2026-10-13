@@ -75,8 +75,10 @@ class FakeASR(ASRBackend):
         return (self.text if self.text is not None else (settings.FAKE_ASR_TEXT or self.DEFAULT_TEXT)), "en-US"
 
     def transcribe(self, samples):
-        text, lang = self.transcribe_chunk(samples)
         duration = len(samples) / TARGET_SR
+        if not utterances(samples):  # like a real model: silence transcribes to nothing
+            return Transcript(duration=duration)
+        text, lang = self.transcribe_chunk(samples)
         return Transcript(segments=[Segment(0.0, duration, text)] if text else [], language=lang, duration=duration)
 
 

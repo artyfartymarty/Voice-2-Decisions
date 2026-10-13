@@ -95,6 +95,7 @@ def api_calls(request):
 def api_live_start(request):
     body = json.loads(request.body or b"{}") if request.content_type == "application/json" else request.POST
     call = Call.objects.create(title=str(body.get("title", ""))[:200], status="live", context=_prefill(body))
+    pipeline.reset_live_state(call.pk)
     return JsonResponse(pipeline.call_payload(call), status=201)
 
 

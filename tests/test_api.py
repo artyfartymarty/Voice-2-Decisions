@@ -81,9 +81,11 @@ def test_live_call_with_audio_chunk(client, wav, fake_asr):
     from django.core.files.uploadedfile import SimpleUploadedFile
     fake_asr.text = "Let's go with the annual plan."
     call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
-    r = client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("c.wav", wav)})
+    from tests.conftest import turns_audio, wav_bytes
+    chunk = wav_bytes(turns_audio(1))  # pause, 1 s of speech, pause: the speech is complete inside the chunk
+    r = client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("c.wav", chunk)})
     assert [m["kind"] for m in r.json()["new_moments"]] == ["decision"]
-    assert Call.objects.get(pk=call["id"]).duration == pytest.approx(1.0, abs=0.01)
+    assert Call.objects.get(pk=call["id"]).duration == pytest.approx(3.0, abs=0.01)
 
 
 def test_pending_tool_calls_replay_once_tool_exists(client, wav):

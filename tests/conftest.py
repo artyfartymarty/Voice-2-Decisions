@@ -42,7 +42,9 @@ class ScriptedASR(FakeASR):
         self.lines = list(lines)
 
     def transcribe(self, samples):
-        self.text = self.lines.pop(0) if self.lines else ""
+        from copilot.audio import utterances
+        if utterances(samples):  # silence consumes no line, like a real model returning nothing
+            self.text = self.lines.pop(0) if self.lines else ""
         return super().transcribe(samples)
 
 

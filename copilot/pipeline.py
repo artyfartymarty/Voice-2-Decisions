@@ -176,6 +176,38 @@ def _split_chunk_by_turns(chunk_start: float, chunk_end: float, turns, last_spea
     return [tuple(x) for x in merged]
 
 
+_carry: dict[int, tuple[float, np.ndarray]] = {}  # live call id -> (call time of carried audio, samples)
+MAX_CARRY_S = 6.0
+
+
+def reset_live_state(call_id: int):
+    """Forget in-memory live state (carried audio, diarization session) for a call that is (re)starting."""
+    _carry.pop(call_id, None)
+    close_live_session(call_id)
+
+
+def _cut_at_pause(buf: np.ndarray, final: bool) -> int:
+    """How many samples of `buf` can be transcribed now: up to the middle of the last pause.
+
+    Audio after that may be a word still being spoken. Continuous speech longer than MAX_CARRY_S is cut at its
+    quietest point so latency stays bounded.
+    """
+    if final or not len(buf):
+        return len(buf)
+    spans = audio.utterances(buf)
+    if not spans:
+        return len(buf)  # only silence
+    guard = int(0.25 * TARGET_SR)
+    for i in range(len(spans) - 1, -1, -1):
+        end = spans[i][1]
+        if end < len(buf) - guard:  # this utterance is followed by a pause
+            nxt = spans[i + 1][0] if i + 1 < len(spans) else len(buf)
+            return (end + nxt) // 2
+    if len(buf) > MAX_CARRY_S * TARGET_SR:
+        return audio.split_on_silence(buf, max_seconds=MAX_CARRY_S)[0][1]
+    return 0
+
+
 def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None, final: bool = False,
                     speaker: str = "") -> list[Moment]:
     """One step of a live call: a new piece of transcript text, or a short audio chunk.
@@ -191,21 +223,26 @@ def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None
         samples = audio.decode(audio_bytes)
         chunk_end = chunk_start + len(samples) / TARGET_SR
         session = live_session(call.pk)
+        turns = []
         if session is not None:
             turns = session.push(samples)
             if final:
                 turns = session.finish()
                 close_live_session(call.pk)
-            last = call.context.get("last_speaker", "")
-            for a, b, spk in _split_chunk_by_turns(chunk_start, chunk_end, turns, last):
-                rel = samples[int((a - chunk_start) * TARGET_SR): int((b - chunk_start) * TARGET_SR)]
-                t = backend.transcribe(rel)
+        # Transcribe only up to the last pause; the rest waits for the next chunk so no word is cut in half.
+        carry_start, carry = _carry.pop(call.pk, (chunk_start, np.zeros(0, dtype=np.float32)))
+        buf = np.concatenate([carry, samples])
+        cut = _cut_at_pause(buf, final)
+        if cut < len(buf):
+            _carry[call.pk] = (carry_start + cut / TARGET_SR, buf[cut:])
+        ready_end = carry_start + cut / TARGET_SR
+        if cut:
+            spans = (_split_chunk_by_turns(carry_start, ready_end, turns, call.context.get("last_speaker", ""))
+                     if session is not None else [(carry_start, ready_end, speaker)])
+            for a, b, spk in spans:
+                t = backend.transcribe(buf[int((a - carry_start) * TARGET_SR): int((b - carry_start) * TARGET_SR)])
                 if t.text:
                     pieces.append(Piece(a, b, spk, t.text))
-        else:
-            t = backend.transcribe(samples)
-            if t.text:
-                pieces.append(Piece(chunk_start, chunk_end, speaker, t.text))
         call.duration = chunk_end
     if text:
         pieces.append(Piece(call.duration, call.duration, speaker, text))

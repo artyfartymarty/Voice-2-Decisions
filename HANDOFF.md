@@ -1,43 +1,57 @@
-# Handoff: run Voice-2-Decisions in a container on EC2 and test it
+# Handoff: run Voice-2-Decisions on EC2 and test it
 
-These are instructions for the person or agent setting this up. Follow the steps in order. Every step lists the
-command and what success looks like. All of it was verified on the author's machine (RTX 5070 Ti, Docker Desktop)
-on 2026-10-12: 35 fast tests passed, 3 GPU tests passed, and the smoke test passed.
+Instructions for the person or agent setting this up. Follow the steps in order; each lists the command and what
+success looks like. Everything here was run on the author's machine (RTX 5070 Ti 16 GB, Docker Desktop) on
+2026-10-12/13. The measured results are in section 8.
+
+## What runs
+
+Three containers, started by one `docker compose` command:
+
+| Service | What it is | GPU memory |
+|---|---|---|
+| `asr` | NVIDIA NeMo-Speech.cpp v0.2.0 (prebuilt CUDA archive, SHA-pinned) serving English Nemotron ASR Q8 and Nemotron 3 Diarization Q8 on :8080 | ~1.5 GB |
+| `winnow` | Winnow (EldanRing/winnow-inference @ a50c7d0, built from source): sentiment for the Customer Experience use case on :8091 | E2B ~6 GB / 12B ~13 GB |
+| `web` | Django UI + JSON API (Python 3.12, gunicorn) on :8000: speaker roles, winnow rules, the three use-case tools, live streaming diarization | ~1 GB |
+
+Models download on first start into Docker volumes and are checked against pinned SHA-256s.
 
 ## 0. What you need
 
-- **EC2 instance with an NVIDIA GPU.** A `g5.xlarge` (A10G 24 GB) or `g6.xlarge` (L4 24 GB) is plenty, since the
-  model uses about 1.6 GB of VRAM.
-- **AMI:** "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04 or 24.04)". It ships the NVIDIA driver, Docker and
-  the NVIDIA Container Toolkit. With another AMI, install those three yourself. The driver must be **570 or newer**,
-  because the image uses CUDA 12.8.
-- **Disk:** at least 40 GB on the root volume (image about 12 GB, model cache about 2.5 GB).
-- **Outbound HTTPS** to Docker Hub, PyPI and huggingface.co, used during build and the first model load.
-- **Inbound:** SSH. For the web UI, either open TCP 8000 to your IP or use an SSH tunnel (step 6).
-- **No GPU?** Everything except the real-model tests still runs on a CPU instance. Skip the `-f docker-compose.gpu.yml`
-  parts and set `ASR_BACKEND=fake` in `.env`.
+- **EC2 GPU instance.** `g6.xlarge` (L4 24 GB) or `g6e.xlarge` (L40S 48 GB) are the expected choices; `g5.xlarge`
+  (A10G 24 GB) also works. With Winnow-12B (`WINNOW_TARGET=q8`), use a 24 GB+ card.
+- **AMI:** "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04 or 24.04)". It ships driver 595, Docker and
+  the NVIDIA Container Toolkit. **Do not use the ECS GPU AMI**: its driver (550) is too old. The driver must be
+  **580 or newer**, because the Winnow image is built on CUDA 13.0.
+- **Disk:** at least 80 GB on the root volume. The images are about 25 GB and the models about 7 GB with E2B, or
+  20 GB with 12B. The Winnow build also needs room for its compiler image.
+- **Outbound HTTPS** to Docker Hub, GitHub, PyPI and huggingface.co, for the build and the first model download.
+- **Inbound:** SSH. For the UI, either open TCP 8000 to your IP or use an SSH tunnel (step 6).
 
 ## 1. Get the code onto the instance
-
-The repo is `https://github.com/artyfartymarty/Voice-2-Decisions`:
 
 ```bash
 git clone https://github.com/artyfartymarty/Voice-2-Decisions.git
 cd Voice-2-Decisions
 ```
 
-If you received the files directly instead, as plain files and not a zip, copy the whole folder up with
-`scp -r` or `rsync` and `cd` into it.
+If you received the files directly instead, as plain files and not a zip, copy the folder up with `scp -r` or
+`rsync` and `cd` into it.
 
-## 2. Check the GPU is visible to Docker
+## 2. Check the GPU is visible to Docker, and note its architecture
 
 ```bash
-nvidia-smi
+nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv
 docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
 ```
 
-Success means both print the GPU table. If the second fails, the NVIDIA Container Toolkit is missing. Install it
-(`sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`).
+The driver should be 580 or newer. `compute_cap` gives the architecture: 8.6 is A10G (g5), 8.9 is L4/L40S
+(g6/g6e), and 12.0 is Blackwell (g7e, RTX 50-series). If the second command fails, install the NVIDIA Container
+Toolkit:
+
+```bash
+sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+```
 
 ## 3. Configure
 
@@ -46,7 +60,14 @@ cp .env.example .env
 sed -i "s|^DJANGO_SECRET_KEY=.*|DJANGO_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')|" .env
 ```
 
-To reach the UI by the instance's address instead of a tunnel, also edit `.env`:
+- `CUDA_ARCH`: the default `86;89;120` builds Winnow for all three GPU families. To build faster, set only
+  yours, for example `CUDA_ARCH=89` on g6/g6e (compute_cap 8.9 → 89).
+- `WINNOW_TARGET`: keep `e2b` unless you're on a 24 GB+ card and want 12B (`q8`).
+- To use the real reference exports instead of the synthetic samples, put `customers.csv` and
+  `location_notes.csv` in `./reference`, plus `disputes.csv`, `fleet.csv` and `airport_aliases.csv` if you have
+  them. Then uncomment the `./reference:/reference:ro` line in `docker-compose.yml` and set
+  `REFERENCE_DIR=/reference`.
+- To reach the UI by the instance's address, also set:
 
 ```
 DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,<public-dns-or-ip>
@@ -57,56 +78,93 @@ DJANGO_CSRF_TRUSTED_ORIGINS=http://<public-dns-or-ip>:8000
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+docker compose ps
 curl -s "http://localhost:8000/healthz?load=1"
 ```
 
-The first `healthz?load=1` downloads the model, which takes a minute or two. Success looks like:
-`"ok": true ... "backend": "nemotron" ... "loaded": true, "cuda": true, "device": "cuda:0"`.
+The first build compiles Winnow, which takes several minutes. The first start downloads the models. Success:
+- `docker compose ps` shows `asr` and `web` as healthy and `winnow` as running.
+- `healthz` reports `"backend": "nemo_speech"` with `"ready": true` and `"capabilities": ["asr", "diarization"]`,
+  and the diarizer shows `"device": "cuda:0"`.
+- `curl -s localhost:8091/health` from inside the network (`docker compose exec web curl -s winnow:8091/health`)
+  returns `{"status":"ok"}`.
 
 ## 5. Run the tests
 
 ```bash
-# a) Fast suite: rules, audio, API, tools. No GPU or model needed. Expect: 35 passed, 3 skipped.
+# a) Fast suite: rules, extractor, tail slot, use cases, API, live carry, clients (servers mocked). No GPU.
+#    Expect: all passed, a handful skipped (the GPU tests).
 docker compose --profile test run --rm test
 
-# b) Real-model suite on the GPU. Expect: 3 passed.
+# b) Real models on the GPU (Transformers path, Nemotron diarization, speech service). Expect: all passed.
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile test run --rm -e RUN_GPU_TESTS=1 test \
-  pytest -v -rs tests/test_gpu_nemotron.py
+  pytest -v -s -rs tests/test_gpu_nemotron.py
 
-# c) End to end against the running server: upload, summary, and a live call in 5 s chunks. Expect: SMOKE TEST PASSED
+# c) End to end against the running stack: upload, live chunks, mono quote call with all use cases.
+#    Expect: SMOKE TEST PASSED
 docker compose exec web sh scripts/smoke_test.sh
+
+# d) Simulated live call: stream a mono WAV in real time and measure latency. Expect: p95 well under 1 s,
+#    and quote_request, dispute_risk and sentiment_shift in first_fired.
+docker compose exec web python scripts/stream_wav.py tests/fixtures/quote_call_phone_mono.wav --chunk 2
+
+# e) Sentiment model vs word list on 30 labeled call lines. Expect winnow accuracy around 0.9 or higher.
+docker compose exec web python scripts/eval_sentiment.py
+
+# f) Your own calls: speaker accuracy against hand-labeled turns (call.wav + call.truth.json side by side).
+docker compose exec web python manage.py eval_speakers /path/in/container/call.wav
 ```
 
-In (b) and (c), `tests/fixtures/sample_call.wav` (a 20 s business call) should produce one of each moment, with this
-summary headline: `we decided to go with the annual plan`, and one action item with owner `Sarah` due `Friday`.
+To stream your own WAVs (16-bit PCM, any rate), copy them in and run `stream_wav.py` on them. The live API is HTTP
+chunked: `POST /api/calls/live/`, then `POST /api/calls/<id>/partial/` with `audio` chunks and `final=true` on the last.
 
 ## 6. Open the UI
 
-- Tunnel: `ssh -L 8000:localhost:8000 ubuntu@<instance>`, then browse http://localhost:8000. Microphone live mode works
-  this way, because browsers only allow the mic on localhost or HTTPS.
-- Direct: http://<public-dns-or-ip>:8000 (needs step 3's extra settings and port 8000 open). Upload works; the
-  microphone doesn't over plain HTTP.
+- Tunnel: `ssh -L 8000:localhost:8000 ubuntu@<instance>`, then browse http://localhost:8000. The microphone live
+  mode works this way, because browsers only allow the mic on localhost or HTTPS.
+- Direct: http://<public-dns-or-ip>:8000. This needs the extra settings from step 3 and port 8000 open. Upload
+  works, but the microphone doesn't over plain HTTP.
 
 ## 7. Day-2 commands
 
 ```bash
-docker compose logs -f web                     # server logs
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # redeploy after a code change
-docker compose exec web python manage.py process_call /path/in/container.wav   # CLI transcription
-docker compose down                            # stop (the data volume with db + model cache is kept)
+docker compose logs -f web asr winnow            # logs
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # redeploy after a change
+docker compose exec web python manage.py process_call /path/in/container.wav  # CLI: one call -> summary JSON
+docker compose down                               # stop (volumes with models and db are kept)
 ```
+
+## 8. Measured results (RTX 5070 Ti, synthesized test calls)
+
+| What | Result |
+|---|---|
+| ASR, English Nemotron Q8 on NeMo-Speech.cpp (speech service, warm) | 0% WER on all three test calls; 44 s call in 0.17 s (ASR only), 0.4–0.6 s with diarization |
+| ASR, Nemotron 3.5 multilingual via Transformers (fallback `ASR_BACKEND=nemotron`) | 0–2% WER; 44 s call in 0.79 s, plus separate diarization |
+| Speaker roles on mono calls (agent / caller) | 8/8 turns; 100% of speech time on the clean call, 99.8% on the phone-quality 8 kHz μ-law call |
+| Full pipeline, one 44 s mono call (upload → speakers → transcript → roles → use cases → tools → DB) | 0.45–0.8 s |
+| Live, streamed in real time in 2 s chunks | 136 ms p50 / 178 ms p95 per chunk; GP + disputes fire ~0.13 s after the quote is said, the sentiment alert ~0.17 s after the line |
+| Sentiment, 30 labeled call lines | Winnow-E2B 93% accuracy, 8/10 negative lines caught, 30 ms per line; word list 60%, 1/10 |
+| Entity extraction (customer, location, tail number) | 2.6 ms p95 per transcript update, CPU |
+| GPU memory, whole stack with Winnow-E2B | about 8.5 GB on top of the desktop |
+
+These are synthesized TTS calls, which are easier than real phone audio (crosstalk, similar voices, hold music).
+Measure real calls with step 5f and `stream_wav.py` before relying on the alerts.
+
+Not yet measured: Winnow-12B against E2B on the same set (the 12B download finished after a GPU pause), and the
+14 s cold start of the first live request (the warm-up step still to add).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `could not select device driver "nvidia"` | NVIDIA Container Toolkit is missing; see step 2 |
-| `CUDA driver version is insufficient` | the host driver is older than 570; use the Deep Learning Base AMI or upgrade the driver |
-| `healthz` shows `"cuda": false` | you started without `-f docker-compose.gpu.yml` |
+| `could not select device driver "nvidia"` | NVIDIA Container Toolkit missing; see step 2 |
+| `CUDA driver version is insufficient` / winnow exits at start | driver older than 580; use the Deep Learning Base AMI, not the ECS GPU AMI |
+| winnow fails with "no kernel image is available" | its build didn't include your GPU: set `CUDA_ARCH` from compute_cap and `up -d --build` |
+| `healthz` shows `"cuda": false` | started without `-f docker-compose.gpu.yml` |
+| sentiment says `lexicon (winnow unavailable)` | winnow not up yet or out of memory: `docker compose logs winnow`; on 16 GB keep `WINNOW_TARGET=e2b` |
 | `DisallowedHost` / 400 on the public URL | add the host to `DJANGO_ALLOWED_HOSTS`, then `docker compose up -d` |
 | 403 CSRF on the upload form | set `DJANGO_CSRF_TRUSTED_ORIGINS` to the exact origin you browse to |
-| model download fails or is rate limited | check outbound HTTPS to huggingface.co; optionally set `HF_TOKEN` in `.env` |
-| out of disk during build | grow the root volume to 40 GB+ (`docker system df` shows usage) |
+| model download fails | check outbound HTTPS to huggingface.co and github.com |
 
 ## Earlier design (gfl-copilot, never pushed) and how this one differs
 

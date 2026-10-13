@@ -121,3 +121,37 @@ def test_two_leg_quote_call_hits_all_three_use_cases(nemotron):
         assert any(a["owner"] == "agent" and a["due"].lower() == "end of day" for a in summary["action_items"])
     finally:
         set_backend(None)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", ["quote_call_mono", "quote_call_phone_mono"])
+def test_speech_service_mono_call(name):
+    """The default stack: NeMo-Speech.cpp ASR + diarization in one request (needs the asr service running)."""
+    import os
+    import urllib.request
+
+    from copilot.asr import NemoSpeechASR
+    from copilot.diarize import FakeDiarizer, set_diarizer
+    from copilot.evaluation import load_truth, role_accuracy
+
+    url = os.environ.get("NEMO_SPEECH_URL", "http://asr:8080")
+    try:
+        urllib.request.urlopen(f"{url}/ready", timeout=3)
+    except Exception:
+        pytest.skip(f"speech service not reachable at {url}")
+    fixtures = Path(__file__).parent / "fixtures"
+    set_backend(NemoSpeechASR(url))
+    set_diarizer(FakeDiarizer())  # enables the speakers path; the service does the diarizing
+    try:
+        call = Call.objects.create(title=name)
+        pipeline.process_recording(call, [(fixtures / f"{name}.wav").read_bytes()])
+        assert call.status == "done", call.error
+        segs = [{"start": s.start, "end": s.end, "role": s.role} for s in call.segments.all()]
+        score = role_accuracy(segs, load_truth(fixtures / f"{name}.truth.json"))
+        print(f"\n{name} via speech service: roles={call.roles} accuracy={score['time_accuracy']} turns={score['turns_correct']}/{score['turns']}")
+        assert score["time_accuracy"] >= 0.95
+        summary = pipeline.call_summary(call)
+        assert summary["quotes"] and summary["dispute_warnings"] and summary["sentiment_alerts"]
+    finally:
+        set_backend(None)
+        set_diarizer(None)

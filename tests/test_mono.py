@@ -122,3 +122,38 @@ def test_text_partials_with_speaker_labels(client):
     d = client.get(f"/api/calls/{call['id']}/summary/").json()
     assert d["speakers"] == {"A": "agent", "B": "caller"}
     assert [a["speaker"] for a in d["sentiment_alerts"]] == ["caller"]
+
+
+def test_live_audio_waits_for_a_pause():
+    import numpy as np
+    from copilot.pipeline import _cut_at_pause
+    from tests.conftest import tone
+    sr = 16000
+    silence = np.zeros(sr, dtype=np.float32)
+    # speech still going at the end of the chunk: hold everything back
+    assert _cut_at_pause(np.concatenate([silence, tone(1.0)]), final=False) == 0
+    # a finished utterance then new speech: cut in the pause between them
+    buf = np.concatenate([tone(1.0), silence, tone(0.5)])
+    cut = _cut_at_pause(buf, final=False)
+    assert 1.1 * sr < cut < 1.9 * sr
+    # final chunk: everything
+    assert _cut_at_pause(buf, final=True) == len(buf)
+    # long continuous speech is cut anyway, so latency stays bounded
+    assert 0 < _cut_at_pause(tone(8.0), final=False) < 8 * sr
+
+
+@pytest.mark.django_db
+def test_live_word_cut_across_chunks_is_reassembled(client, scripted):
+    """Speech split across two chunk uploads is transcribed once, whole, after the pause arrives."""
+    import numpy as np
+    from tests.conftest import tone
+    asr = scripted(["We decided to go with the annual plan."])
+    call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
+    url = f"/api/calls/{call['id']}/partial/"
+    speech = tone(1.5)
+    first, second = speech[:12000], np.concatenate([speech[12000:], np.zeros(16000, dtype=np.float32)])
+    r1 = client.post(url, {"audio": SimpleUploadedFile("a.wav", wav_bytes(first))}).json()
+    assert r1["new_moments"] == []  # mid-word: nothing transcribed yet
+    r2 = client.post(url, {"audio": SimpleUploadedFile("b.wav", wav_bytes(second)), "final": "true"}).json()
+    assert [m["kind"] for m in r2["new_moments"]] == ["decision"]
+    assert asr.lines == []  # one transcription for the whole utterance
