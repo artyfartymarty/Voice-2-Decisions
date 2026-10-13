@@ -46,6 +46,8 @@ services:
       TAIL_NORMALIZER_URL: ${TAIL_NORMALIZER_URL:-}
       TAIL_NORMALIZER_MODEL: ${TAIL_NORMALIZER_MODEL:-}
       TAIL_NORMALIZER_API_KEY: ${TAIL_NORMALIZER_API_KEY:-}
+      TAIL_NORMALIZER_REASONING: ${TAIL_NORMALIZER_REASONING:-}
+      TAIL_NORMALIZER_TIMEOUT: ${TAIL_NORMALIZER_TIMEOUT:-3}
     ports:
       - "${PORT:-8000}:8000"
     # Real reference data: put customers.csv + location_notes.csv (+ disputes.csv, fleet.csv, airport_aliases.csv)

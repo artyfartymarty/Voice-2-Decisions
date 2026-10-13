@@ -176,6 +176,80 @@ the API while Winnow is loading or if it stops answering.
 | `scripts/fetch_model.sh` | checks the model file, or downloads it (`MODELS_SOURCE`) |
 | `scripts/publish_model.py` | optional: put the model on a GitHub release in parts |
 
+## Tail numbers with GPT 6 Luna on Bedrock
+
+GPT 6 Luna is on Amazon Bedrock with an OpenAI-compatible Chat Completions endpoint, so the tail model needs no extra
+code: point the four settings below at it. (Sources: the Bedrock
+[GPT-6 Luna model card](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-luna.html),
+[Chat Completions on Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions.html),
+[API key permissions](https://docs.aws.amazon.com/bedrock/latest/userguide/api-keys-permissions.html).)
+
+**1. Pick the inference profile.** Luna can only be called through a cross-Region inference profile, never by its
+base model ID on `bedrock-runtime`. AWS already defines two; you don't create them:
+
+| Profile ID | Regions you can call it from |
+|---|---|
+| `us.openai.gpt-6-luna` | us-east-1, us-east-2, us-west-1, us-west-2, ca-central-1, ca-west-1 |
+| `global.openai.gpt-6-luna` | those plus most EU / AP / SA Regions |
+
+Use `us.openai.gpt-6-luna` from a US Region (same Region as the EC2 instance keeps latency down). Want your own profile
+for cost tracking? Create an *application inference profile* from the `us.` one (Bedrock console → Cross-Region
+inference, or `aws bedrock create-inference-profile`) and use its ARN as the model; that variant is untested here.
+
+**2. Allow it in IAM.** The identity behind the API key needs to invoke the profile and the model in each Region the
+profile routes to, and to use bearer-token (API key) auth:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow",
+     "Action": ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
+     "Resource": ["arn:aws:bedrock:*:<account-id>:inference-profile/us.openai.gpt-6-luna",
+                  "arn:aws:bedrock:*::foundation-model/openai.gpt-6-luna"]},
+    {"Effect": "Allow", "Action": "bedrock:CallWithBearerToken", "Resource": "*"}
+  ]
+}
+```
+
+The first call to a third-party model may also need someone with AWS Marketplace permissions to accept its terms in the
+Bedrock console (Model catalog → GPT-6 Luna).
+
+**3. Get a Bedrock API key.** Bedrock console → API keys → generate a key (a long-term one is simplest for a hackathon;
+give it an expiry). It goes in `.env` only; `.env` is git-ignored.
+
+**4. Set `.env`** and restart (`docker compose up -d`):
+
+```
+TAIL_MODE=model
+TAIL_NORMALIZER_URL=https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1
+TAIL_NORMALIZER_MODEL=us.openai.gpt-6-luna
+TAIL_NORMALIZER_API_KEY=<your Bedrock API key>
+TAIL_NORMALIZER_REASONING=none
+TAIL_NORMALIZER_TIMEOUT=3
+```
+
+Change the Region in the URL to yours. `TAIL_NORMALIZER_REASONING=none` asks Luna not to reason first (its default is
+`medium`), which is what keeps one tail number fast; the request sends `max_completion_tokens` and no temperature.
+
+**5. Check it** without a call in progress:
+
+```bash
+curl -s https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions \
+  -H "Authorization: Bearer $TAIL_NORMALIZER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"us.openai.gpt-6-luna","reasoning_effort":"none","max_completion_tokens":16,
+       "messages":[{"role":"user","content":"Write this aircraft registration with no dashes: November eight eight November whiskey"}]}'
+```
+
+Then type `caller: tail number November eight eight November whiskey` in the console: the variable fills and the agent
+gets "Read the tail number back". If the call fails, the API logs Bedrock's reason (`docker compose logs api`), and the
+tail is simply not filled from that line.
+
+Not done here: SigV4 signing with the EC2 instance role instead of an API key (the API container is standard-library
+only); `bedrock-mantle` (us-east-1 only, `.../openai/v1` on `bedrock-mantle.us-east-1.api.aws`, base model ID
+`openai.gpt-6-luna`) should also work with the same settings but wasn't tried. None of this was run against Bedrock
+from here; it follows the AWS docs above.
+
 ## Notes: omitted for now
 
 - **Tail numbers go to the external model, not the parser.** The deterministic tail parser (`copilot/slots.py`:
