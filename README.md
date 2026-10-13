@@ -130,7 +130,7 @@ prompts (such as an incomplete tail number), and the decision:
 
 ```json
 {"decision": {"function": "fuel_quote", "ready": true, "by": "winnow", "p": 0.93,
-              "say": "Quote NORTHWIND AVIATION, LLC at KTEB: current margin 0.3125 GPPG, room to come down 0.2275 to the 0.0850 floor. ...",
+              "say": "Quote NORTHWIND AVIATION, LLC at KTEB: current 0.3125 GPPG. Don't go below the minimum, 0.0850 GPPG (0.2275 of room).",
               "result": {"current_gppg": 0.3125, "floor_gppg": 0.085, "...": "..."},
               "because": "Northwind, account 204511. Price per gallon at Teterboro?"},
  "variables": {"customer_number": "204511", "icao": "KTEB"}}

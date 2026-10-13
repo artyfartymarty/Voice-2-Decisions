@@ -2,7 +2,8 @@
 
 Two flat files in REFERENCE_DIR (synthetic copies in reference/; point REFERENCE_DIR at real exports at work):
 
-    customers.csv       CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
+    customers.csv       CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, MIN_GPPG, CURRENT_GPPG (+ optional P12M_TOTAL_WFS_VOL,
+                        P12M_ADDRESSABLE_VOL)
     location_notes.csv  ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (HTML)
 
 Finding customers, locations and tail numbers in speech lives in extract.py.
@@ -126,8 +127,8 @@ def load(directory: str | Path) -> Reference:
         for row in csv.DictReader(f):
             ref.sites.append(CustomerSite(
                 customer_name=row["CUSTOMER_NAME"].strip(), customer_number=row["CUSTOMER_NUMBER"].strip(),
-                icao=row["ICAO"].strip().upper(), total_volume=float(row["P12M_TOTAL_WFS_VOL"] or 0),
-                addressable_volume=float(row["P12M_ADDRESSABLE_VOL"] or 0),
+                icao=row["ICAO"].strip().upper(), total_volume=float(row.get("P12M_TOTAL_WFS_VOL") or 0),
+                addressable_volume=float(row.get("P12M_ADDRESSABLE_VOL") or 0),
                 min_gppg=float(row["MIN_GPPG"] or 0), current_gppg=float(row["CURRENT_GPPG"] or 0),
             ))
     with open(directory / "location_notes.csv", newline="", encoding="utf-8-sig") as f:

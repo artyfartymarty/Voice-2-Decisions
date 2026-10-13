@@ -68,8 +68,8 @@ def fuel_quote(ref, fleet, customer_number, icao):
             "found": True, "current_gppg": site.current_gppg, "floor_gppg": site.min_gppg, "room_gppg": room,
             "addressable_gal": site.addressable_volume, "total_gal": site.total_volume,
             "fees": loc.fees if loc else [],
-            "say": f"Quote {name} at {icao}: current margin {site.current_gppg:.4f} GPPG, room to come down {room:.4f} to the "
-                   f"{site.min_gppg:.4f} floor. {site.addressable_volume:,.0f} gal addressable P12M."}
+            "say": f"Quote {name} at {icao}: current {site.current_gppg:.4f} GPPG. Don't go below the minimum, "
+                   f"{site.min_gppg:.4f} GPPG ({room:.4f} of room)."}
 
 
 def dispute_check(ref, fleet, icao, customer_number=None):

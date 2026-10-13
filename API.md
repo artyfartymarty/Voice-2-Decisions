@@ -85,7 +85,7 @@ The decision model picks the function whose result answers what the caller asked
 
 ```json
 {"function": "fuel_quote", "ready": true,
- "say": "Quote NORTHWIND AVIATION, LLC at KTEB: current margin 0.3125 GPPG, room to come down 0.2275 to the 0.0850 floor. 39,500 gal addressable P12M.",
+ "say": "Quote NORTHWIND AVIATION, LLC at KTEB: current 0.3125 GPPG. Don't go below the minimum, 0.0850 GPPG (0.2275 of room).",
  "result": {"customer": "NORTHWIND AVIATION, LLC", "customer_number": "204511", "icao": "KTEB",
             "fbo": "Meadowlark Jet Center", "current_gppg": 0.3125, "floor_gppg": 0.085, "...": "..."},
  "because": "Account 204511 at Teterboro.",
