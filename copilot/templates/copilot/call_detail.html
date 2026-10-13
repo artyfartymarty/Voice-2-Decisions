@@ -2,6 +2,7 @@
 {% block title %}{{ call }} · Voice-2-Decisions{% endblock %}
 {% block main_class %} class="wide"{% endblock %}
 {% block content %}
+{% if fake_asr %}<div class="slot slot-incomplete" role="note">The speech model is off (ASR_BACKEND=fake), so every chunk is transcribed as the same placeholder text. Set ASR_BACKEND to nemotron or nemo_speech for real transcripts.</div>{% endif %}
 <div class="card">
   <h1>{% if call.status == "live" %}<span class="live-dot" id="live-dot" aria-hidden="true"></span>{% endif %}{{ call }}</h1>
   <p class="muted" style="margin:0">Status: <span id="status">{{ call.status }}</span> · {{ call.duration|floatformat:1 }} s{% if call.language %} · {{ call.language }}{% endif %} · <a href="{% url 'api_summary' call.pk %}">summary JSON</a> · <a href="{% url 'api_call' call.pk %}">full JSON</a></p>

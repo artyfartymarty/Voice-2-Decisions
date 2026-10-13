@@ -49,7 +49,12 @@ def index(request):
 
 def _index_context(**extra) -> dict:
     return {"calls": Call.objects.all()[:50], "test_calls": callview.test_calls(), "refresh_ms": settings.LIVE_REFRESH_MS,
-            "gateway_ws_url": settings.GATEWAY_WS_URL, **extra}
+            "gateway_ws_url": settings.GATEWAY_WS_URL, "fake_asr": _fake_asr(), **extra}
+
+
+def _fake_asr() -> bool:
+    """ASR_BACKEND=fake returns the same canned text for every chunk; the pages warn so it isn't mistaken for a bug."""
+    return get_backend().name == "fake"
 
 
 @require_GET
@@ -80,7 +85,7 @@ PANELS = ("who", "slot", "prompts", "transcript", "summary")
 def call_detail(request, pk):
     call = get_object_or_404(Call, pk=pk)
     ctx = _call_page_context(call)
-    ctx.update(gateway_ws_url=settings.GATEWAY_WS_URL, refresh_ms=settings.LIVE_REFRESH_MS)
+    ctx.update(gateway_ws_url=settings.GATEWAY_WS_URL, refresh_ms=settings.LIVE_REFRESH_MS, fake_asr=_fake_asr())
     return render(request, "copilot/call_detail.html", ctx)
 
 

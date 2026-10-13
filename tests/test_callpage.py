@@ -217,3 +217,9 @@ def test_streamed_chunks_build_a_live_call(client, fake_asr):
     call = Call.objects.get(pk=pk)
     assert call.status == "done" and call.duration == pytest.approx(6.0, abs=0.01)
     assert call.moments.filter(kind="quote_request").exists()
+
+
+def test_pages_warn_when_the_speech_model_is_fake(client):
+    pk, _ = live_call(client)
+    for url in ("/", f"/calls/{pk}/"):
+        assert "The speech model is off (ASR_BACKEND=fake)" in client.get(url).content.decode()

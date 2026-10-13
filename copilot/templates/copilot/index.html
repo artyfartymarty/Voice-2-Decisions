@@ -1,6 +1,7 @@
 {% extends "copilot/base.html" %}
 {% block main_class %} class="wide"{% endblock %}
 {% block content %}
+{% if fake_asr %}<div class="slot slot-incomplete" role="note">The speech model is off (ASR_BACKEND=fake), so every chunk is transcribed as the same placeholder text. Set ASR_BACKEND to nemotron or nemo_speech for real transcripts.</div>{% endif %}
 <div class="card" id="sim">
   <h1>Test with a recording</h1>
   <p class="muted" style="margin-top:0">Drop a WAV file here, or pick one of the test calls. It plays in your browser and is streamed to the server in short chunks at the pace it plays, like a live call, so the transcript, prompts and alerts fill in as you listen.</p>
