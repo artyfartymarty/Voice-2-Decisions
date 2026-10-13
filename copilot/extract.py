@@ -27,6 +27,10 @@ NATO = {
 DIGITS = {"zero": "0", "oh": "0", "o": "0", "one": "1", "two": "2", "to": "2", "too": "2", "three": "3", "tree": "3",
           "four": "4", "for": "4", "fower": "4", "five": "5", "fife": "5", "six": "6", "seven": "7", "eight": "8",
           "ait": "8", "nine": "9", "niner": "9"}
+# Numbers said as numbers rather than digit by digit: "one twenty three" -> 1 2 3, "five hundred" -> 5 0 0.
+TEENS = {w: str(10 + i) for i, w in enumerate(
+    "ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+TENS = {w: str(i + 2) for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split())}
 # Registration prefixes: country -> (prefix, body pattern). US N-numbers: N + 1-5 chars, digit first, max 2 trailing letters.
 REGISTRATIONS = [
     ("US", re.compile(r"^N[1-9][0-9]{0,4}$|^N[1-9][0-9]{0,3}[A-HJ-NP-Z]$|^N[1-9][0-9]{0,2}[A-HJ-NP-Z]{2}$")),
@@ -96,9 +100,16 @@ def words(text: str) -> list[str]:
 def spoken_to_symbols(tokens: list[str]) -> list[str]:
     """Map each token to a symbol string: 'november'->'N', 'one'->'1', 'N123AB'->'N123AB', other words -> ''."""
     out = []
-    for t in tokens:
+    for i, t in enumerate(tokens):
         low = t.lower()
-        if low in NATO:
+        nxt = tokens[i + 1].lower() if i + 1 < len(tokens) else ""
+        if low in TEENS:
+            out.append(TEENS[low])
+        elif low in TENS:  # "twenty three" -> 2 then 3; "twenty" alone -> 20
+            out.append(TENS[low] + ("" if nxt in DIGITS and DIGITS[nxt] != "0" and nxt not in {"to", "too", "for", "o", "oh"} else "0"))
+        elif low == "hundred" and out and out[-1].isdigit():
+            out.append("00")
+        elif low in NATO:
             out.append(NATO[low])
         elif low in DIGITS and low not in {"to", "too", "for"}:  # homophones of 2 and 4 are too common in speech
             out.append(DIGITS[low])
@@ -153,7 +164,8 @@ def _runs(text: str) -> list[Run]:
         if span:
             sym = "".join(syms[k] for k in span)
             # spelling: phonetic alphabet, spoken digits, or two or more single letters ("B T")
-            phon = (any(toks[k].lower() in NATO or toks[k].lower() in DIGITS for k in span)
+            phon = (any(toks[k].lower() in NATO or toks[k].lower() in DIGITS or toks[k].lower() in TEENS
+                        or toks[k].lower() in TENS for k in span)
                     or sum(len(toks[k]) == 1 and toks[k].isalpha() for k in span) >= 2)
             neg = span[0] > 0 and toks[span[0] - 1].lower() in ("not", "isn't", "wasn't")
             runs.append(Run(sym, " ".join(toks[k] for k in span), phon, neg))

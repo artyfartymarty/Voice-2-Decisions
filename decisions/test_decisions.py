@@ -79,6 +79,36 @@ class Engine(unittest.TestCase):
         self.assertIn("Confirm the account", out["prompts"][0])
         self.assertEqual(call.feed("caller", "Account 318842.")["prompts"], [])  # the number itself needs no read-back
 
+    def test_tail_numbers_said_every_way(self):
+        cases = {
+            "Tail number November eight eight November Whiskey.": "N88NW",       # phonetic + digit words
+            "Tail is November niner fife tree alpha bravo.": "N953AB",            # aviation digits
+            "Tail number November one twenty three alpha bravo.": "N123AB",      # "one twenty three"
+            "Tail number November seven seven hundred whiskey.": "N7700W",       # "seven hundred"
+            "Tail number N 5 1 2 B T.": "N512BT",                                # letters, as Nova writes them
+            "Tail number N512BT.": "N512BT",                                     # already a registration
+            "Tail is five one two bravo tango.": "N512BT",                       # "November" dropped
+            "Registration golf alpha bravo charlie delta.": "GABCD",             # non-US prefix
+        }
+        for said, tail in cases.items():
+            call = Call("t", EXTRACTOR, RuleDecider())  # no customer, so no fleet list to check against
+            call.feed("caller", said)
+            self.assertEqual(call.variables.get("tail_number", {}).get("value"), tail, said)
+
+    def test_tail_checked_against_the_customers_fleet(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        call.feed("caller", "Northwind, account 204511.")
+        out = call.feed("caller", "Tail number November one twenty three alpha bravo.")
+        self.assertNotIn("tail_number", call.variables)  # valid format, but not one of Northwind's tails
+        self.assertIn("isn't on file", out["prompts"][0])
+        call.feed("caller", "Sorry, November eight eight November whiskey.")
+        self.assertEqual(call.variables["tail_number"]["value"], "N88NW")
+
+    def test_invalid_n_numbers_are_rejected(self):
+        call = Call("t", EXTRACTOR, RuleDecider())
+        call.feed("caller", "Tail number November zero one two three.")  # N-numbers never start with 0
+        self.assertNotIn("tail_number", call.variables)
+
     def test_speculative_text_changes_nothing(self):
         call = Call("t", EXTRACTOR, RuleDecider())
         call.feed("caller", "account 204511 quote at Teterboro", final=False)

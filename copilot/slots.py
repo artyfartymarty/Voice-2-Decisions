@@ -73,8 +73,13 @@ def update(slot: dict, clause: str, speaker: str, extractor, customer: str | Non
         candidate, how = slot["partial"] + candidate, "joined"
 
     events = []
-    country = registration_country(candidate)
     fleet = extractor.fleet.get(customer or "", set())
+    # US callers often drop the leading "November": "five one two bravo tango" is N512BT. Only for a full-length
+    # body or a tail on file, so a first breath ("five one two" ... "bravo tango") still waits for the rest.
+    if not registration_country(candidate) and registration_country("N" + candidate) == "US" \
+            and ("N" + candidate in fleet or len(candidate) >= 4):
+        candidate, how = "N" + candidate, "n_implied"
+    country = registration_country(candidate)
     if country:
         conf = 0.99 if candidate in fleet else _confidence(candidate, clause, run, slot)
         if how == "corrected":
