@@ -459,6 +459,8 @@ class Guardrails(unittest.TestCase):
     def test_winnow_guard_allows_only_the_decision_endpoint(self):
         import http.client
         import sys
+        if not (ROOT / "winnow" / "guard.py").exists():
+            self.skipTest("winnow/guard.py ships in the Winnow image, not the API image")
         sys.path.insert(0, str(ROOT / "winnow"))
         import guard
         upstream = HTTPServer(("127.0.0.1", 0), FakeWinnow)

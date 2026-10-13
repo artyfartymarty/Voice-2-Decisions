@@ -16,6 +16,7 @@ services:
     image: ${ECR_REGISTRY:?set ECR_REGISTRY in .env}/${ECR_PREFIX:-voice2decisions}/winnow:${IMAGE_TAG:-latest}
     environment:
       WINNOW_CONTEXT: ${WINNOW_CONTEXT:-4096}
+      WINNOW_GUARD: ${WINNOW_GUARD:-on}  # off: no endpoint allowlist in front of winnow-server
     volumes:
       - ./models/winnow:/models:ro
     networks: [decide]  # no internet: only the api can reach it

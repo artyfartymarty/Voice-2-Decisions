@@ -495,7 +495,8 @@ options the API wrote. It never generates text that reaches the caller, the agen
 **2. Winnow can only answer inside the harness.**
 - winnow-server also has a free-text chat endpoint (`/v1/chat/completions`), inspection and metrics. It runs on
   127.0.0.1 inside its container, and a small allowlist in front of it (`winnow/guard.py`) passes only
-  `POST /v1/systemone` and `GET /health`. Everything else gets 403, and request bodies over 64 KB get 413.
+  `POST /v1/systemone` and `GET /health`. Everything else gets 403, and request bodies over 64 KB get 413. The
+  guard is optional: `WINNOW_GUARD=off` in `.env` runs winnow-server directly, and the service works the same.
 - The API accepts an answer only if it is one of the options it offered (`checked_choice` in `decisions/decider.py`).
   Anything else surfaces no decision, and the agent carries on as normal. A pick between close names that isn't one
   of the names counts as "none of these", so the agent asks for the account number. Yes/no answers must be a

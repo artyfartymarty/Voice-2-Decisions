@@ -28,6 +28,8 @@ def handler(upstream_host: str, upstream_port: int):
                 return self._deny(403, f"{self.command} {path} is not allowed; only POST /v1/systemone")
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_BODY:
+                self.rfile.read(min(length, 16 * MAX_BODY))  # drain it, or Windows resets the connection mid-reply
+                self.close_connection = True
                 return self._deny(413, "request too large")
             body = self.rfile.read(length) if length else None
             headers = {k: v for k, v in self.headers.items() if k.lower() in ("content-type", "authorization")}

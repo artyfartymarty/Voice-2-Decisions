@@ -37,15 +37,19 @@ cache = os.environ.get("WINNOW_CACHE") or None  # f16 (default) or q8_0 (less me
 ns = argparse.Namespace(model=a.model, reasoning="off", mtp="off", vision="off", context=context,
                         model_dir=Path(os.environ.get("WINNOW_MODEL_DIR", "/models")), server=None, cache=cache)
 INNER_PORT = 8092  # winnow-server itself: loopback only, reached through the guard
-args = winnow.serve_command(ns) + ["--host", "127.0.0.1", "--port", str(INNER_PORT)]
+guarded = os.environ.get("WINNOW_GUARD", "on").lower() != "off"  # off: winnow-server directly on 8091, no allowlist
+host = os.environ.get("WINNOW_HOST", "0.0.0.0")
+args = winnow.serve_command(ns) + (["--host", "127.0.0.1", "--port", str(INNER_PORT)] if guarded else
+                                   ["--host", host, "--port", a.port])
 if os.environ.get("WINNOW_API_KEY"):
     key = Path("/tmp/winnow.key")
     key.write_text(os.environ["WINNOW_API_KEY"])
     args += ["--api-key-file", str(key)]
 print("winnow serve:", " ".join(args[1:]), flush=True)
+if not guarded:
+    os.execv(args[0], args)
 server = subprocess.Popen(args)
 signal.signal(signal.SIGTERM, lambda *_: server.terminate())
 threading.Thread(target=lambda: os._exit(server.wait() or 1), daemon=True).start()  # the server stops: so do we
-host = os.environ.get("WINNOW_HOST", "0.0.0.0")
 print(f"winnow guard: {host}:{a.port} -> 127.0.0.1:{INNER_PORT}, allowing {sorted(guard.ALLOWED)}", flush=True)
 guard.serve(host, int(a.port), "127.0.0.1", INNER_PORT)

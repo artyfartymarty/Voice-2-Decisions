@@ -24,6 +24,7 @@ services:
     entrypoint: ["python3", "/wrap/serve.py", "--model", "q8"]
     environment:
       WINNOW_CONTEXT: ${WINNOW_CONTEXT:-4096}
+      WINNOW_GUARD: ${WINNOW_GUARD:-on}  # off: no endpoint allowlist in front of winnow-server
     volumes:
       - ./models/winnow:/models:ro
       - ./winnow:/wrap:ro
