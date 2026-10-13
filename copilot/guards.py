@@ -17,8 +17,8 @@ from django.core.exceptions import ImproperlyConfigured
 log = logging.getLogger(__name__)
 
 CHOICES = {
-    "ASR_BACKEND": ("nemo_speech", "nemotron", "fake"),
-    "DIARIZER": ("nemotron", "fake", "off"),
+    "ASR_BACKEND": ("nemo_speech", "nemotron", "demo", "fake"),
+    "DIARIZER": ("nemotron", "demo", "fake", "off"),
     "LEG_MODE": ("separate", "mix"),
     "SENTIMENT_BACKEND": ("auto", "winnow", "lexicon"),
     "DIARIZER_STREAMING_MODE": ("low_latency", "very_low_latency", "ultra_low_latency"),

@@ -102,3 +102,9 @@ def test_demo_backend_and_diarizer_are_selected_by_settings(settings):
     finally:
         set_backend(None)
         set_diarizer(None)
+
+
+def test_demo_backends_pass_the_startup_check(settings):
+    from copilot import guards
+    settings.ASR_BACKEND, settings.DIARIZER, settings.ALLOW_FAKE_BACKEND = "demo", "demo", False
+    assert not [p for p in guards.config_problems() if "demo" in p]

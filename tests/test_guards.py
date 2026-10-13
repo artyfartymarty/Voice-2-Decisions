@@ -34,7 +34,7 @@ def test_fake_diarizer_refused_too(settings):
 
 def test_misspelled_backend_refused_at_start_not_first_request(settings):
     settings.ASR_BACKEND = "nemo_spech"
-    assert guards.config_problems() == ["ASR_BACKEND='nemo_spech' is not one of nemo_speech, nemotron, fake"]
+    assert guards.config_problems() == ["ASR_BACKEND='nemo_spech' is not one of nemo_speech, nemotron, demo, fake"]
 
 
 def test_real_config_starts(settings):
