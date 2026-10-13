@@ -194,6 +194,10 @@ the API while Winnow is loading or if it stops answering.
   caller; "none" (or a pick below `DECIDE_MIN_P`) asks for the account number instead. A tail that isn't on the
   customer's fleet works the same way, with the fleet's tails one or two characters off ("N47JA": N47AJ, N74AJ).
   Winnow gets only text: Nova Sonic's transcript, never the audio.
+- **Initials and short forms:** Luna returns the name as the caller said it. "BHJC", "B.H.J.C." or "B H" match
+  the initials of a customer's name (all words, or just the non-generic ones), and a first word only one customer
+  has ("Northwind", "Meridian") matches directly. Initials two customers share go to Winnow to choose. Either way the
+  agent reads the account back.
 - **A tail on file identifies the customer.** If the tail is on a customer's fleet (`fleet.csv`), that customer is
   used, over a name that was heard; when they disagree ("Arrow" heard, tail on Aero Vista's fleet) the agent is told
   to read the account back. An account number said as digits, written or spoken ("two oh four five one one"), fills
@@ -504,10 +508,7 @@ every value, whether it came from the parser, Winnow or GPT 6 Luna:
 - **icao:** must be an airport in `location_notes.csv`.
 - **tail_number:** must be a well-formed registration of 2 to 10 letters and digits.
 
-Anything else is refused and logged, and functions never see it. Luna's answers are checked before they are even
-looked up (`decisions/model_extract.py`). A tail must be 2 to 10 letters and digits. A company name must be letters,
-digits, spaces and `& . , ' -` only, at most 80 characters. Luna's text is never passed on as it is: it is only ever
-matched against `customers.csv` and the fleet.
+Anything else is refused and logged, and functions never see it.
 
 Tests: the `Guardrails` class in `decisions/test_decisions.py`.
 

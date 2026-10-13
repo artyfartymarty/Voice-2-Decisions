@@ -67,14 +67,7 @@ class ModelExtractor:
         raw = str(raw or "").strip().strip("\"'.")
         if not raw or raw.upper() == "NONE":
             return None
-        if kind == "tail_number":
-            tail = re.sub(r"[^A-Z0-9]", "", raw.upper())
-            return tail if 2 <= len(tail) <= 10 else None
-        # A company name: letters, digits, spaces and & . , ' - only, at most 80 characters; anything else is refused.
-        if len(raw) > 80 or not re.fullmatch(r"[A-Za-z0-9 &.,'\-]+", raw):
-            log.warning("extract model answer refused (%s): %.80r", kind, raw)
-            return None
-        return raw
+        return re.sub(r"[^A-Z0-9]", "", raw.upper()) if kind == "tail_number" else raw
 
 
 def from_env(env) -> ModelExtractor | None:

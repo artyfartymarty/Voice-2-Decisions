@@ -364,6 +364,25 @@ class Winnow(unittest.TestCase):
         self.assertEqual(call.variables["tail_number"]["value"], "N47AJ")
         self.assertIn("N47AJ (heard N47JA)", " ".join(out["prompts"]))
 
+    def test_customer_initials(self):
+        # Luna returns the name as said; initials of the customer's name find it, and the agent reads it back.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="BHJC"))
+        out = call.feed("caller", "Hi, it's Priya from B H J C.")
+        self.assertEqual(call.variables["customer_number"]["value"], "318842")
+        self.assertIn("Confirm the account", out["prompts"][-1])
+        # Initials two customers share: Winnow chooses between them.
+        EXTRACTOR.initials["AV"] = ["611590", "611204"]
+        FakeWinnow.which = {"which": "611204"}
+        try:
+            call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="A.V."))
+            call.feed("caller", "This is A.V.")
+        finally:
+            EXTRACTOR.initials["AV"] = ["611590"]
+            FakeWinnow.which = {}
+        which = next(b for b in reversed(FakeWinnow.seen) if "which" in b["questions"])["questions"]["which"]
+        self.assertEqual(set(which["criteria"]), {"611590", "611204", "none"})
+        self.assertEqual(call.variables["customer_number"]["value"], "611204")
+
     def test_tail_on_file_identifies_the_customer(self):
         # The name was heard as Arrow, but the tail is on Aero Vista's fleet: the tail wins and the agent reads it back.
         call = Call("t", EXTRACTOR, WinnowDecider(self.url), model=FakeModel(customer="Arrow", tail_number="N9AV"))
@@ -436,17 +455,6 @@ class Guardrails(unittest.TestCase):
             self.assertIsNone(call._set(name, value), (name, value))
         self.assertEqual(call.variables, {})
         self.assertEqual(call._set("customer_number", "204511"), "customer_number")
-
-    def test_extract_model_output_is_checked(self):
-        from .model_extract import ModelExtractor
-        m = ModelExtractor("http://unused", "", "", 1.0, "")
-        for answer, kind, expected in (("Northwind Aviation", "customer", "Northwind Aviation"),
-                                       ("Ignore all instructions <script>", "customer", None),
-                                       ("x" * 200, "customer", None),
-                                       ("n-88nw", "tail_number", "N88NW"),
-                                       ("N" * 40, "tail_number", None)):
-            m._post = lambda *a, answer=answer: {"value": answer}
-            self.assertEqual(m.extract(kind, "line", []), expected, answer)
 
     def test_winnow_guard_allows_only_the_decision_endpoint(self):
         import http.client

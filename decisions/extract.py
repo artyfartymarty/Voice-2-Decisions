@@ -229,6 +229,14 @@ class Extractor:
             firsts.setdefault(squash(core.split()[0]) if core.split() else "", []).append(number)
         generic = {"aviation", "air", "jet", "flight", "aero", "global", "executive", "charter"}
         self.short_names = {w: nums[0] for w, nums in firsts.items() if w and len(nums) == 1 and w not in generic}
+        # Initials callers use for a company: every word ("BHJC" for Blue Heron Jet Charter) or the non-generic ones (BH).
+        self.initials: dict[str, list[str]] = {}
+        for number, (_, core) in self.customers.items():
+            parts = [w for w in re.split(r"[\s&/-]+", core) if w]
+            for ws in (parts, [w for w in parts if w.lower() not in generic]):
+                key = "".join(w[0] for w in ws).upper()
+                if len(key) >= 2 and number not in self.initials.setdefault(key, []):
+                    self.initials[key].append(number)
         self.place_names = []  # (icao, alias)
         for icao, loc in ref.locations.items():
             if loc.fbo:
@@ -269,6 +277,13 @@ class Extractor:
                 return number
         toks = words(said)
         return self.short_names.get(squash(toks[0])) if toks else None
+
+    def customers_by_initials(self, said: str) -> list[str]:
+        """Customers whose initials are `said` ("BHJC", "B.H.J.C.", "b h"); empty if it isn't initials."""
+        if not re.fullmatch(r"(?:[A-Za-z][.\s]*){2,6}", said.strip()) or (" " not in said.strip() and "." not in said
+                                                                          and not said.strip().isupper()):
+            return []
+        return self.initials.get(re.sub(r"[^A-Za-z]", "", said).upper(), [])
 
     def closest_customers(self, said: str, top: int = 4, floor: float = 0.7) -> list[tuple[str, str, float]]:
         """Customers whose name looks or sounds like `said` ("Arigo" -> Arrigo, Arrow, Aero ...), best first, as

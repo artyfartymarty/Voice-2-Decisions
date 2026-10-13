@@ -133,8 +133,12 @@ class Call:
         if not said:
             return []
         number, p, how = self.extractor.exact_customer(said), 1.0, ""
+        by_initials = self.extractor.customers_by_initials(said) if number is None else []
+        if len(by_initials) == 1:  # "BHJC": one customer has those initials
+            number = by_initials[0]
         if number is None:
-            close = self.extractor.closest_customers(said)
+            close = ([(n, self.extractor.customers[n][0], 1.0) for n in by_initials]  # initials shared: Winnow picks
+                     or self.extractor.closest_customers(said))
             pick = self._choose("customer", said, text, {n: name for n, name, _ in close})
             if pick and pick["value"] and pick["p"] >= self.min_p:
                 number, p, how = pick["value"], pick["p"], "winnow"
