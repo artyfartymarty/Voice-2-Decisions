@@ -325,5 +325,18 @@ class Api(unittest.TestCase):
         self.assertEqual(out["decision"]["function"], "fuel_quote")
 
 
+    def test_simulated_nova_stream_gives_the_same_call(self):
+        import itertools
+        from .simulate import nova_events, timed
+        app = App({"DECIDER": "rules"})
+        ids, steps = itertools.count(1), []
+        for turn in timed(json.loads((ROOT / "demos" / "demo_quote_call.json").read_text())):
+            for _, ev in nova_events(turn, ids):
+                steps += app.events("sim", ev)["steps"]
+        self.assertTrue(any(not s["final"] for s in steps))  # partials were streamed
+        _, call = play("demo_quote_call")
+        self.assertEqual(app.call("sim")[0].variables.keys(), call.variables.keys())
+        self.assertEqual([s["line"]["text"] for s in steps if s["final"]], [l["text"] for l in call.transcript])
+
 if __name__ == "__main__":
     unittest.main()

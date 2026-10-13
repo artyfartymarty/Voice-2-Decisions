@@ -139,6 +139,24 @@ prompts (such as an incomplete tail number), and the decision:
 Other endpoints: `GET /calls/<id>` (full call state), `DELETE /calls/<id>`, `GET /functions`, `GET /healthz`.
 Set `DECISION_WEBHOOK_URL` to have every new decision POSTed to your app as well.
 
+## Simulate the Nova Sonic side
+
+`decisions/simulate.py` stands in for your boss's end. It streams a scripted call into the service the way Nova Sonic
+does: for each turn, a speculative text block that grows a few words at a time while the person talks, then the final
+text (`contentStart`, `textOutput`, `contentEnd`, `USER` for the caller and `ASSISTANT` for the agent), at the call's
+real pace. The variables, function calls and decisions print as they happen.
+
+```bash
+docker compose exec api python -m decisions.simulate --url http://localhost:8000 demos/demo_quote_call.json
+python -m decisions.simulate --url http://<ec2-host>:8000 demos/*.json       # from your laptop, all three calls
+python -m decisions.simulate --speed 4 demos/demo_frustrated_caller.json     # in-process, no server, 4x speed
+python -m decisions.simulate --dump demos/demo_quote_call.json > call.jsonl  # just the events, to hand to the UI side
+```
+
+`--speed 0` sends without waiting, `--chunk N` sets the words per speculative update, and `--no-partials` sends only
+final text. To add a call, put a new JSON file in `demos/`: a list of `{"speaker": "caller" | "agent", "text": "..."}`
+turns. `start` and `end` (seconds) are optional; without them each turn is timed from its word count.
+
 ## Test without a GPU
 
 ```bash
@@ -182,6 +200,7 @@ the API while Winnow is loading or if it stops answering.
 | `decisions/extract.py`, `slots.py`, `reference.py` | list matching, the tail parser, and the reference CSV loader |
 | `decisions/server.py` | the HTTP API |
 | `decisions/replay.py` | feed a demo call, Nova events or typed lines |
+| `decisions/simulate.py` | stream a scripted call like Nova Sonic (partials, then final text, in real time) |
 | `decisions/test_decisions.py` | tests (`python -m unittest decisions.test_decisions`) |
 | `reference/`, `demos/` | sample customers / locations / fleet, and three demo calls |
 | `winnow/serve.py` | starts winnow-server inside its container |
