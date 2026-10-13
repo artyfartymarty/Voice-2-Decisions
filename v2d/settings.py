@@ -100,6 +100,8 @@ ADDRESSABLE_CHECK_RATIO = float(os.environ.get("ADDRESSABLE_CHECK_RATIO", "0.5")
 TAIL_MIN_CONFIDENCE = float(os.environ.get("TAIL_MIN_CONFIDENCE", "0.8"))
 # Dispute guidance fires for locations with at least this many disputes in their private notes.
 DISPUTE_MIN_COUNT = int(os.environ.get("DISPUTE_MIN_COUNT", "3"))
+# Test page: pregenerated WAV calls listed on the entry page (click one to stream it as a simulated live call).
+TEST_CALLS_DIR = Path(os.environ.get("TEST_CALLS_DIR") or BASE_DIR / "tests" / "fixtures")
 # Optional: a WebSocket that announces call updates (the gateway's events stream). When set, the call page and the
 # alert view refresh as soon as a message arrives; otherwise they poll every LIVE_REFRESH_MS while a call is live.
 GATEWAY_WS_URL = os.environ.get("GATEWAY_WS_URL", "")

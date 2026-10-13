@@ -64,7 +64,10 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 curl "http://localhost:8000/healthz?load=1"     # downloads both models on first run (~3 GB), then reports the GPU
 ```
 
-Open http://localhost:8000 to upload a recording or record live from the microphone.
+Open http://localhost:8000 to test with a recording: drop in a WAV file or click one of the test calls
+(`TEST_CALLS_DIR`, default `tests/fixtures`). It plays in the browser and is streamed to the server in 1-5 s chunks
+at the pace it plays (0.5-4x), as a live call, so the transcript, prompt cards and alerts fill in as you listen. The
+same page still uploads a whole recording or records live from the microphone.
 
 ## Tests
 

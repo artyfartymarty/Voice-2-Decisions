@@ -131,15 +131,15 @@ def test_summary_appears_when_the_call_ends(client):
 def test_live_page_has_the_refresh_script(client, settings):
     pk, url = live_call(client)
     page = client.get(f"/calls/{pk}/").content.decode()
-    assert f"/calls/{pk}/panels/" in page and "setInterval(refresh, 1500)" in page and "new WebSocket" in page
-    assert 'const ws = "";' in page  # no gateway configured: poll only
+    assert f"/calls/{pk}/panels/" in page and "refreshMs: 1500" in page and "new WebSocket" in page
+    assert 'wsUrl: ""' in page  # no gateway configured: poll only
 
     settings.GATEWAY_WS_URL = "wss://gateway.example/v1/events"
     page = client.get(f"/calls/{pk}/").content.decode()
     assert "wss://gateway.example/v1/events" in page
 
     say(client, url, "", final=True)
-    assert "setInterval(refresh" not in client.get(f"/calls/{pk}/").content.decode()
+    assert "v2dLive(" not in client.get(f"/calls/{pk}/").content.decode()
 
 
 def test_manager_alerts_view(client):
@@ -165,3 +165,55 @@ def test_manager_alerts_view(client):
 
 def test_manager_alerts_empty(client):
     assert "No alerts." in client.get("/alerts/").content.decode()
+
+
+# --- entry page: test with a recording ---
+
+def test_entry_page_lists_the_test_calls(client):
+    page = client.get("/").content.decode()
+    assert "Drop a WAV file" in page and "Test calls" in page
+    assert 'data-url="/test-calls/quote_call_mono.wav"' in page and "8 labeled turns" in page
+    assert "/api/calls/live/" in page and "/partial/" in page  # the browser streams the file as a live call
+
+
+def test_test_calls_list_reads_the_folder(settings, tmp_path):
+    from .conftest import tone, wav_bytes
+    (tmp_path / "b.wav").write_bytes(wav_bytes(tone(2.0)))
+    (tmp_path / "a.wav").write_bytes(wav_bytes(tone(1.0)))
+    (tmp_path / "a.truth.json").write_text('[{"start": 0, "end": 1, "role": "agent"}]')
+    (tmp_path / "broken.wav").write_bytes(b"not audio")
+    (tmp_path / "notes.txt").write_text("ignored")
+    settings.TEST_CALLS_DIR = tmp_path
+    calls = callview.test_calls()
+    assert [(c["name"], c["duration"], c["labeled_turns"]) for c in calls] == [("a.wav", 1.0, 1), ("b.wav", 2.0, 0)]
+    settings.TEST_CALLS_DIR = tmp_path / "missing"
+    assert callview.test_calls() == []
+
+
+def test_test_call_file_is_served(client):
+    r = client.get("/test-calls/quote_call_mono.wav")
+    assert r.status_code == 200 and r["Content-Type"] == "audio/wav"
+    assert b"".join(r.streaming_content)[:4] == b"RIFF"
+
+
+def test_test_call_file_only_serves_listed_files(client):
+    assert client.get("/test-calls/nope.wav").status_code == 404
+    assert client.get("/test-calls/quote_call_mono.truth.json").status_code == 404
+    assert client.get("/test-calls/..%2Fconftest.py").status_code == 404
+
+
+def test_streamed_chunks_build_a_live_call(client, fake_asr):
+    """What the entry page does: start a live call, post PCM16 WAV chunks in order, the last one with final."""
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from .conftest import tone, wav_bytes
+    pk, url = live_call(client, title="Test: quote_call_mono.wav")
+    lines = ["Northwind Aviation here, account 204511.", "I need a fuel quote at KTEB please.", ""]
+    for i, text in enumerate(lines):
+        fake_asr.text = text
+        data = {"audio": SimpleUploadedFile("chunk.wav", wav_bytes(tone(2.0)), "audio/wav")}
+        if i == len(lines) - 1:
+            data["final"] = "true"
+        assert client.post(url, data).status_code == 200
+    call = Call.objects.get(pk=pk)
+    assert call.status == "done" and call.duration == pytest.approx(6.0, abs=0.01)
+    assert call.moments.filter(kind="quote_request").exists()

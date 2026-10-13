@@ -3,7 +3,11 @@
 Kept apart from the views so the live panels (refreshed while the call runs) and the first page load render the
 same data, and so it can be tested without a request.
 """
+import json
 import zlib
+
+import soundfile as sf
+from django.conf import settings
 
 from . import reference
 from .models import Call, Moment
@@ -140,4 +144,22 @@ def manager_alerts(live_only: bool = False, limit: int = 100) -> list[dict]:
                     recent=(m.tool_result or {}).get("recent", []) if isinstance(m.tool_result, dict) else [],
                     message=(m.tool_result or {}).get("dispatcher_alert", "") if isinstance(m.tool_result, dict) else "")
         out.append(card)
+    return out
+
+
+def test_calls() -> list[dict]:
+    """WAV files in TEST_CALLS_DIR for the entry page: name, length, and whether hand-labeled turns sit next to it."""
+    folder = settings.TEST_CALLS_DIR
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob("*.wav")):
+        try:
+            info = sf.info(str(path))
+        except RuntimeError:
+            continue
+        truth = path.with_suffix(".truth.json")
+        turns = len(json.loads(truth.read_text())) if truth.exists() else 0
+        out.append({"name": path.name, "path": str(path), "duration": round(info.duration, 1),
+                    "channels": info.channels, "labeled_turns": turns})
     return out

@@ -1,6 +1,6 @@
 import json
 
-from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect, render
 from django.template.loader import render_to_string
@@ -40,11 +40,25 @@ def index(request):
     if request.method == "POST":
         legs = [f.read() for f in (request.FILES.get("audio"), request.FILES.get("audio_b")) if f]
         if not legs:
-            return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50], "error": "Choose an audio file."}, status=400)
+            return render(request, "copilot/index.html", _index_context(error="Choose an audio file."), status=400)
         call = Call.objects.create(title=request.POST.get("title", "")[:200], context=_prefill(request.POST))
         pipeline.process_recording(call, legs, _speakers(request))
         return redirect("call_detail", pk=call.pk)
-    return render(request, "copilot/index.html", {"calls": Call.objects.all()[:50]})
+    return render(request, "copilot/index.html", _index_context())
+
+
+def _index_context(**extra) -> dict:
+    return {"calls": Call.objects.all()[:50], "test_calls": callview.test_calls(), "refresh_ms": settings.LIVE_REFRESH_MS,
+            "gateway_ws_url": settings.GATEWAY_WS_URL, **extra}
+
+
+@require_GET
+def test_call_file(request, name):
+    """One of the pregenerated test calls, by file name (only names listed on the entry page are served)."""
+    match = next((c for c in callview.test_calls() if c["name"] == name), None)
+    if match is None:
+        raise Http404("no such test call")
+    return FileResponse(open(match["path"], "rb"), content_type="audio/wav")
 
 
 def _call_page_context(call) -> dict:

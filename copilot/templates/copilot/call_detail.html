@@ -10,16 +10,7 @@
 
 {% include "copilot/panels/summary.html" %}
 
-<div class="call-grid">
-  <div>
-    {% include "copilot/panels/slot.html" %}
-    {% include "copilot/panels/who.html" %}
-    {% include "copilot/panels/prompts.html" %}
-  </div>
-  <div class="sticky">
-    {% include "copilot/panels/transcript.html" %}
-  </div>
-</div>
+{% include "copilot/_call_grid.html" %}
 
 <div class="card">
   <details>
@@ -39,49 +30,15 @@
 </div>
 
 {% if call.status == "live" %}
+{% include "copilot/_live_js.html" %}
 <script>
-(() => {
-  // Live call: swap the server-rendered panels in place. Refreshes on each gateway WebSocket message when one is
-  // configured, and polls as a fallback; a 204 means nothing changed since `version`.
-  const url = "{% url 'call_panels' call.pk %}";
-  let version = "{{ version|escapejs }}", busy = false, timer;
-  const seen = new Set([...document.querySelectorAll('.pcard[data-id]')].map(el => el.dataset.id));
-
-  async function refresh() {
-    if (busy) return;
-    busy = true;
-    try {
-      const r = await fetch(`${url}?v=${encodeURIComponent(version)}`);
-      if (r.status !== 200) return;
-      const data = await r.json();
-      version = data.version;
-      const box = document.querySelector('[data-scroll]');
-      const atBottom = !box || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-      for (const [name, html] of Object.entries(data.panels)) {
-        const el = document.getElementById(`panel-${name}`);
-        if (el) el.outerHTML = html;
-      }
-      document.querySelectorAll('.pcard[data-id]').forEach(el => {
-        if (!seen.has(el.dataset.id)) { el.classList.add('new'); seen.add(el.dataset.id); }
-      });
-      const nbox = document.querySelector('[data-scroll]');
-      if (nbox && atBottom) nbox.scrollTop = nbox.scrollHeight;
-      document.getElementById('status').textContent = data.status;
-      if (data.status !== 'live') {
-        clearInterval(timer);
-        document.getElementById('live-dot')?.remove();
-      }
-    } catch (e) { /* network blip: next tick retries */ } finally { busy = false; }
-  }
-
-  const ws = "{{ gateway_ws_url|escapejs }}";
-  if (ws) {
-    try { new WebSocket(ws).onmessage = ev => { if (!ev.data || ev.data.includes('{{ call.pk }}')) refresh(); }; } catch (e) {}
-  }
-  const box = document.querySelector('[data-scroll]');
-  if (box) box.scrollTop = box.scrollHeight;
-  timer = setInterval(refresh, {{ refresh_ms }});
-})();
+v2dLive("{% url 'call_panels' call.pk %}", "{{ version|escapejs }}", {
+  refreshMs: {{ refresh_ms }}, wsUrl: "{{ gateway_ws_url|escapejs }}",
+  onUpdate: data => {
+    document.getElementById('status').textContent = data.status;
+    if (data.status !== 'live') document.getElementById('live-dot')?.remove();
+  },
+});
 </script>
 {% endif %}
 {% endblock %}

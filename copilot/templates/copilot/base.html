@@ -64,6 +64,18 @@
   .turn.r-agent .who-label { color:var(--action_item); } .turn.r-caller .who-label { color:var(--key_moment); }
   .turn .t { font-size:12px; color:var(--muted); display:block; font-weight:400; text-transform:none; }
   .pending { color:var(--muted); font-style:italic; padding-top:6px; }
+  .sim-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); gap:16px; }
+  @media (max-width: 760px) { .sim-grid { grid-template-columns:1fr; } }
+  .drop { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; min-height:140px; margin:0;
+          border:2px dashed var(--line); border-radius:10px; cursor:pointer; color:var(--text); font-size:15px; text-align:center; padding:12px; }
+  .drop.over, .drop:hover { border-color:var(--accent); background:var(--bg); }
+  .cases { list-style:none; padding:0; margin:0; } .cases li { padding:3px 0; overflow-wrap:anywhere; }
+  .case { margin:0 6px 0 0; padding:4px 10px; background:transparent; color:var(--accent); border:1px solid var(--accent); font-weight:500; }
+  .player { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .player-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; } .player-row button { margin:0; }
+  label.inline { display:inline-flex; gap:4px; align-items:center; margin:0; color:var(--text); font-size:14px; }
+  select { padding:4px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  progress { width:100%; margin-top:10px; accent-color:var(--accent); }
   details summary { cursor:pointer; color:var(--muted); }
 </style>
 </head>
