@@ -28,7 +28,7 @@ For setting it up on EC2, read **[HANDOFF.md](HANDOFF.md)**.
 | Avoiding Disputes | Single key word, static data search | a location in play plus a keyword (quote, fee, price, callout...) | `dispute_guidance` (notes + dispute list, no model) | fires when the location or the customer is dispute-prone (with rank); prompt to restate fees, and written quote wording. Outcome: get ahead of a credit or rebill |
 | Customer Experience | Sentiment and orchestration | a speaker's sentiment turns negative | `alert_manager` (**sentiment model: Winnow** `/v1/systemone`, lexicon fallback) | prompt to the agent on the call, real-time alert to the designated managers / leads (`MANAGER_WEBHOOKS`) |
 
-Each result carries a card with the sheet's columns: **Who, Want to see, Outcome, Category** (plus Pattern). The
+Each result carries a card with the sheet's columns: **Who** (always Customer), **Want to see, Outcome, Category**, plus Pattern and who was alerted. The
 summary returns them as `use_cases`, and the call page shows them as a table.
 
 Reference data comes from flat files in `REFERENCE_DIR`, with the same columns as the work exports. `disputes.csv`, `fleet.csv` and `airport_aliases.csv` are optional and synthetic here:

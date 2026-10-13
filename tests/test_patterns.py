@@ -49,7 +49,8 @@ def test_gp_card_and_outcomes():
     assert r["margin_high"] is True and r["revised_offer_gppg"] == 0.1988      # 0.3125 >= 3 x 0.085
     assert "feedback on the quoted price" in r["dispatcher_alert"]
     c = r["card"]
-    assert (c["category"], c["who"], c["pattern"]) == ("GP", "Dispatcher", "Static only, Customer and Location required")
+    assert (c["category"], c["who"], c["pattern"]) == ("GP", "Customer", "Static only, Customer and Location required")
+    assert c["alerts"] == "Dispatcher"
     assert "39,500 gal addressable" in c["want_to_see"] and "revised price 0.1988" in c["outcome"]
 
 

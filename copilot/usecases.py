@@ -23,7 +23,8 @@ from .tools import tool
 
 log = logging.getLogger(__name__)
 
-WHO = {  # Who column: who sees it on the call. Adjust to match the sheet.
+WHO = "Customer"  # the sheet's Who column: who the use case concerns (the same for all three rows)
+ALERTS = {  # who receives it (not a sheet column; kept so the UI and routing can say where it went)
     "GP": "Dispatcher",
     "Avoiding Disputes": "Call handler",
     "Customer Experience": "Call handler, managers / leads",
@@ -36,8 +37,8 @@ PATTERN = {
 
 
 def card(category: str, want_to_see: str, outcome: str) -> dict:
-    return {"category": category, "who": WHO[category], "want_to_see": want_to_see, "outcome": outcome,
-            "pattern": PATTERN[category]}
+    return {"category": category, "who": WHO, "want_to_see": want_to_see, "outcome": outcome,
+            "pattern": PATTERN[category], "alerts": ALERTS[category]}
 
 
 def _post(url: str, body: dict) -> bool:

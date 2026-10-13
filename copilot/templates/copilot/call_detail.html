@@ -15,9 +15,9 @@
 <div class="card">
   <h2>Use cases</h2>
   <table>
-    <tr><th>Category</th><th>Who</th><th>Want to see</th><th>Outcome</th></tr>
+    <tr><th>Who</th><th>Want to see</th><th>Outcome</th><th>Category</th></tr>
     {% for c in summary.use_cases %}
-    <tr><td><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td><td>{{ c.who }}</td><td>{{ c.want_to_see }}</td><td>{{ c.outcome }}</td></tr>
+    <tr><td>{{ c.who }}</td><td>{{ c.want_to_see }}<br><span class="muted">Sent to: {{ c.alerts }}</span></td><td>{{ c.outcome }}</td><td><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td></tr>
     {% endfor %}
   </table>
 </div>
