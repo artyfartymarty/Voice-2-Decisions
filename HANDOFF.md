@@ -62,7 +62,9 @@ sed -i "s|^DJANGO_SECRET_KEY=.*|DJANGO_SECRET_KEY=$(python3 -c 'import secrets; 
 
 - `CUDA_ARCH`: the default `86;89;120` builds Winnow for all three GPU families. To build faster, set only
   yours, for example `CUDA_ARCH=89` on g6/g6e (compute_cap 8.9 → 89).
-- `WINNOW_TARGET`: keep `e2b` unless you're on a 24 GB+ card and want 12B (`q8`).
+- `WINNOW_TARGET`: `e2b` fits beside the speech models on 16 GB. On a 24 GB+ card (g5, g6, g6e) use `q8`
+  (Winnow-12B), which catches all frustrated lines in the test set, not 8 of 10. Leave `WINNOW_CONTEXT` empty
+  (12B then runs at 4K, which keeps it inside VRAM).
 - To use the real reference exports instead of the synthetic samples, put `customers.csv` and
   `location_notes.csv` in `./reference`, plus `disputes.csv`, `fleet.csv` and `airport_aliases.csv` if you have
   them. Then uncomment the `./reference:/reference:ro` line in `docker-compose.yml` and set
@@ -161,15 +163,19 @@ docker compose down                               # stop (volumes with models an
 | Speaker roles on mono calls (agent / caller) | 8/8 turns; 100% of speech time on the clean call, 99.8% on the phone-quality 8 kHz μ-law call |
 | Full pipeline, one 44 s mono call (upload → speakers → transcript → roles → use cases → tools → DB) | 0.45–0.8 s |
 | Live, streamed in real time in 2 s chunks | 136 ms p50 / 178 ms p95 per chunk; GP + disputes fire ~0.13 s after the quote is said, the sentiment alert ~0.17 s after the line |
-| Sentiment, 30 labeled call lines | Winnow-E2B 93% accuracy, 8/10 negative lines caught, 30 ms per line; word list 60%, 1/10 |
+| Sentiment, 30 labeled call lines | Winnow-E2B 93% accuracy, 8/10 negative lines, 27–30 ms per line · Winnow-12B (4K context) 97%, 10/10 negative lines, 73 ms · word list 60%, 1/10 |
+| Winnow-12B context | 8K context needs 17.1 GB, so on a 16 GB card Windows spills to system RAM: 585 ms/line. 4K fits: 70 ms (prefill 346 → 35 ms) |
+| Live, 1 s chunks (after the cadence-aware flush) | 66–73 ms p50, all use cases fire, words intact |
+| Cold start | first live request no longer waits: models warm up at server start (~17 s, in the background) |
+| `scripts/check.py --stack` | settings, migrations, tests, doctor all PASS; golden quote call fires quote_lookup, dispute_guidance, alert_manager |
 | Entity extraction (customer, location, tail number) | 2.6 ms p95 per transcript update, CPU |
 | GPU memory, whole stack with Winnow-E2B | about 8.5 GB on top of the desktop |
 
 These are synthesized TTS calls, which are easier than real phone audio (crosstalk, similar voices, hold music).
 Measure real calls with step 5f and `stream_wav.py` before relying on the alerts.
 
-Not yet measured: Winnow-12B against E2B on the same set (the 12B download finished after a GPU pause), and the
-14 s cold start of the first live request (the warm-up step still to add).
+Not yet measured: the whole stack with Winnow-12B on a 24 GB card (the 16 GB dev card can't hold 12B next to the
+speech models). On EC2, run step 5e after switching `WINNOW_TARGET=q8`.
 
 ## Knowledge graph (graphify)
 

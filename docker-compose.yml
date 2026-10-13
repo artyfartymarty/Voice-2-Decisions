@@ -29,7 +29,7 @@ services:
     entrypoint: ["python3", "/wrap/serve.py"]
     environment:
       WINNOW_TARGET: ${WINNOW_TARGET:-e2b}
-      WINNOW_CONTEXT: ${WINNOW_CONTEXT:-8192}
+      WINNOW_CONTEXT: ${WINNOW_CONTEXT:-}   # empty = per model: 4096 for q8 (fits in VRAM), 8192 for e2b
     volumes:
       - winnow-models:/models:ro
       - ./winnow:/wrap:ro
