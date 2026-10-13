@@ -22,6 +22,7 @@ def pytest_collection_modifyitems(config, items):
 def fake_asr(request, settings):
     """Every test uses FakeASR and no diarizer unless it is marked gpu."""
     set_diarizer(None)
+    settings.LIVE_FLUSH_S = 0  # no background flush timers unless a test turns them on
     if "gpu" in request.keywords:
         set_backend(None)
         yield None

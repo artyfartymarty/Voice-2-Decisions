@@ -76,6 +76,8 @@ FAKE_ASR_TEXT = os.environ.get("FAKE_ASR_TEXT", "")
 DIARIZER = os.environ.get("DIARIZER", "nemotron" if ASR_BACKEND in ("nemotron", "nemo_speech") else "off")
 DIARIZER_MODEL_ID = os.environ.get("DIARIZER_MODEL_ID", "nvidia/Nemotron-3-Diarization")
 DIARIZER_STREAMING_MODE = os.environ.get("DIARIZER_STREAMING_MODE", "low_latency")  # or very_low_latency, ultra_low_latency
+# Live calls: audio held back mid-word is transcribed anyway after this many seconds without a new chunk (0 = off).
+LIVE_FLUSH_S = float(os.environ.get("LIVE_FLUSH_S", "0.9"))
 # Two-leg calls: "separate" transcribes each leg with a speaker label (default); "mix" folds them to one mono leg.
 LEG_MODE = os.environ.get("LEG_MODE", "separate")
 

@@ -178,3 +178,43 @@ def test_scorer_selection(settings):
     settings.WINNOW_URL = "http://winnow:8091"
     assert isinstance(sentiment.get_scorer(), WinnowSentiment)
     sentiment.set_scorer(None)
+
+
+# --- demo-run fixes: pleasantries and dispute threats ---
+
+@pytest.mark.parametrize("line", ["How can I help?", "Thanks for calling, how can I help you today?",
+                                  "Is there anything else I can help you with?", "Hi, this is Mark, how may I help?"])
+def test_agent_pleasantries_are_not_questions(line):
+    from copilot.winnow import judge
+    m = judge(line)
+    assert m is None or m.kind != "question"
+
+
+def test_real_questions_still_count():
+    from copilot.winnow import judge
+    assert judge("Can you confirm the start date?").kind == "question"
+    assert judge("How can I get the fee waived?").kind == "question"
+
+
+def test_dispute_threat_is_not_a_generic_risk():
+    from copilot.winnow import judge
+    m = judge("I'll raise a dispute on that invoice.")
+    assert m is None or m.kind != "risk"
+
+
+def test_dispute_threat_routes_to_disputes_even_at_a_clean_location():
+    # KVNY has no dispute history; the threat alone triggers fee reinforcement
+    _, out = run([("caller", "Summit Ridge here, we land at Van Nuys."), ("caller", "I'm going to dispute the callout charge.")])
+    assert "dispute_risk" in kinds(out)
+
+
+def test_dispute_threat_without_location_prompts_the_agent():
+    _, out = run([("caller", "If this happens again we will file a chargeback.")])
+    prompts = [m.tool_call["args"]["message"] for m in out if m.kind == "agent_prompt"]
+    assert prompts and "dispute" in prompts[0]
+
+
+def test_dispute_threat_counts_toward_sentiment():
+    model = StubModel({})  # model hears nothing negative in the wording
+    _, out = run([("caller", "We'll raise a dispute."), ("caller", "And we want a credit for the last one.")], scorer=model)
+    assert [m.speaker for m in out if m.kind == "sentiment_shift"] == ["caller"]

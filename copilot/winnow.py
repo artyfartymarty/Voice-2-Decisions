@@ -64,7 +64,7 @@ RULES: dict[str, list[tuple[re.Pattern, float]]] = {
         (re.compile(r"\b(concern(ed)?|worried|worry|risk|blocker|blocked|problem|issue|objection|hesitant)\b", _I), 0.75),
         (re.compile(r"\b(too (expensive|slow|risky|late)|won't work|doesn't work|can't afford|not sure (we|this)|push ?back)\b", _I), 0.8),
         # complaints are a risk to the account
-        (re.compile(r"\b(overcharg\w*|unacceptable|frustrat\w*|disappoint\w*|complain\w*|dispute\w*|ripped off)\b", _I), 0.75),
+        (re.compile(r"\b(overcharg\w*|unacceptable|frustrat\w*|disappoint\w*|complain\w*|ripped off)\b", _I), 0.75),
     ],
     "key_moment": [
         (re.compile(r"[$€£]\s?\d[\d,]*(\.\d+)?\s?(k|m|million|thousand)?\b", _I), 0.85),
@@ -92,6 +92,17 @@ CLAUSE_BREAK = re.compile(
 )
 MIN_CLAUSE_WORDS = 3
 MIN_SCORE = 0.55
+
+# Agent pleasantries are not open questions ("How can I help?", "Anything else?").
+PLEASANTRY = re.compile(
+    r"^\W*(?:(?:hi|hello|hey|okay|ok|sure|thanks?( you)?( for calling)?|this is \w+)[,.!]?\s*)*"
+    r"(how (can|may|could) i (help|assist)( you)?( today)?|how are you( doing)?( today)?|what can i do for you( today)?"
+    r"|(is there )?anything else( i can (help|do)( you)?( with)?)?|can i help you with anything else|is that all)\W*$", _I)
+# The caller threatening a dispute, credit or rebill: an Avoiding Disputes moment and a Customer Experience signal.
+DISPUTE_THREAT = re.compile(
+    r"\b((i'?ll|i will|we'?ll|we will|i'?m going to|we'?re going to|gonna|going to|have to|want to)\s+"
+    r"(raise|file|open|start|put in|submit)?\s*(a\s+)?(dispute|chargeback|charge back)"
+    r"|dispute (it|this|that|the (charge|invoice|bill|fee))|(issue|want|need) a (credit|rebill|refund))\b", _I)
 
 QUOTE_INTENT = re.compile(r"\b(quotes?|quoted|quoting|pric(e|es|ing)|how much|per gallon|rates?|cost)\b", _I)
 DISPUTE_KEYWORDS = re.compile(r"\b(quotes?|quoted|quoting|fees?|pric(e|es|ing)|charges?|callout|ramp|handling)\b", _I)
@@ -168,6 +179,8 @@ def score_sentence(sentence: str) -> dict[str, float]:
 def judge(sentence: str, start: float | None = None, end: float | None = None) -> Moment | None:
     """One sentence -> its strongest moment (others go in .also), or None if nothing scores high enough."""
     scores = {k: v for k, v in score_sentence(sentence).items() if v >= MIN_SCORE}
+    if PLEASANTRY.search(sentence):
+        scores.pop("question", None)  # "How can I help?" opens the call; it isn't a question to follow up
     if not scores:
         return None
     # On ties, prefer the more actionable kind (order of KINDS).
@@ -253,12 +266,21 @@ class Winnower:
                 out.append(Moment("quote_request", clause, 0.9, start, end, speaker=speaker,
                                   args={"customer_number": ctx["customer"], "icao": ctx["icao"]}))
 
+        # A dispute threat ("I'll raise a dispute") goes to Avoiding Disputes (fees for the location in play, or a
+        # prompt to confirm it) and counts as strongly negative for Customer Experience below.
+        threat = DISPUTE_THREAT.search(clause)
+        if threat and not ctx["icao"] and "threat" not in ctx["dispute_warned"]:
+            ctx["dispute_warned"].append("threat")
+            out.append(Moment("agent_prompt", clause, 0.85, start, end, speaker=speaker,
+                              args={"message": "Caller mentioned a dispute. Confirm the location and restate its fees in writing.",
+                                    "about": "dispute"}))
+
         # Avoiding Disputes. Pattern "Single key word, static data search": a location in play plus a keyword
         # (quote / fee / price...) looks the location and customer up in the notes and the dispute list.
-        keyword = DISPUTE_KEYWORDS.search(clause) or QUOTE_INTENT.search(clause)
+        keyword = DISPUTE_KEYWORDS.search(clause) or QUOTE_INTENT.search(clause) or threat
         if ctx["icao"] and keyword and ctx["icao"] not in ctx["dispute_warned"]:
             profile = self.reference.dispute_profile(ctx["icao"], ctx["customer"])
-            if max(profile["location_disputes"], profile["customer_disputes"]) >= self.dispute_min_count:
+            if threat or max(profile["location_disputes"], profile["customer_disputes"]) >= self.dispute_min_count:
                 ctx["dispute_warned"].append(ctx["icao"])
                 out.append(Moment("dispute_risk", clause, 0.85, start, end, speaker=speaker,
                                   args={"icao": ctx["icao"], "customer_number": ctx["customer"],
@@ -269,6 +291,8 @@ class Winnower:
         history = [t for _, t in ctx["recent"].get(speaker, [])]
         judged = self.scorer.score(speaker, clause, history) if self.scorer else {"score": sentiment(clause), "backend": "lexicon"}
         score = judged["score"]
+        if threat:
+            score = min(score, -1.0)  # threatening a dispute is a strong negative signal whatever the wording
         ctx["sentiment_backend"] = judged["backend"]
         if abs(score) >= 0.2:
             # Tracked per speaker, so a friendly agent doesn't mask an angry caller (and vice versa).

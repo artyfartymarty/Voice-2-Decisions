@@ -162,6 +162,9 @@ class FakeSession:
     def finish(self):
         return self.d.diarize(self.audio)
 
+    def turns(self):
+        return self.d.diarize(self.audio)
+
 
 class FakeDiarizer:
     """Tests: every pause-separated utterance alternates speaker 1, speaker 2, speaker 1..."""

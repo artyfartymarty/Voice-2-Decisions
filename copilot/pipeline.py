@@ -5,6 +5,7 @@ uploads). call.context["roles"] maps them to "agent" / "caller", and everything 
 the role.
 """
 import logging
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -177,11 +178,55 @@ def _split_chunk_by_turns(chunk_start: float, chunk_end: float, turns, last_spea
 
 
 _carry: dict[int, tuple[float, np.ndarray]] = {}  # live call id -> (call time of carried audio, samples)
+_live_locks: dict[int, threading.Lock] = {}
+_flush_timers: dict[int, threading.Timer] = {}
 MAX_CARRY_S = 6.0
+
+
+def _lock(call_id: int) -> threading.Lock:
+    return _live_locks.setdefault(call_id, threading.Lock())
+
+
+def _schedule_flush(call_id: int):
+    """If audio is still held back and no new chunk arrives within LIVE_FLUSH_S, transcribe it anyway.
+
+    Without this, the last words before a quiet stretch (or the end of a stream that never sends final) would
+    only show up when the next chunk or the final request arrives.
+    """
+    old = _flush_timers.pop(call_id, None)
+    if old:
+        old.cancel()
+    if call_id in _carry and settings.LIVE_FLUSH_S > 0:
+        t = threading.Timer(settings.LIVE_FLUSH_S, flush_live_audio, args=(call_id, True))
+        t.daemon = True
+        _flush_timers[call_id] = t
+        t.start()
+
+
+def flush_live_audio(call_id: int, from_timer: bool = False) -> list:
+    """Transcribe and winnow whatever audio a live call is holding back. Safe to call any time."""
+    from django.db import close_old_connections
+
+    if from_timer:
+        close_old_connections()  # the timer runs on its own thread with its own DB connection
+    try:
+        call = Call.objects.filter(pk=call_id, status="live").first()
+        if call is None or call_id not in _carry:
+            return []
+        return process_partial(call, flush=True)
+    except Exception:
+        log.exception("flushing live audio for call %s failed", call_id)
+        return []
+    finally:
+        if from_timer:
+            close_old_connections()
 
 
 def reset_live_state(call_id: int):
     """Forget in-memory live state (carried audio, diarization session) for a call that is (re)starting."""
+    timer = _flush_timers.pop(call_id, None)
+    if timer:
+        timer.cancel()
     _carry.pop(call_id, None)
     close_live_session(call_id)
 
@@ -209,7 +254,20 @@ def _cut_at_pause(buf: np.ndarray, final: bool) -> int:
 
 
 def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None, final: bool = False,
-                    speaker: str = "") -> list[Moment]:
+                    speaker: str = "", flush: bool = False) -> list[Moment]:
+    """Thread-safe entry: one live step at a time per call (requests and the flush timer)."""
+    old = _flush_timers.pop(call.pk, None)
+    if old:
+        old.cancel()
+    with _lock(call.pk):
+        new = _process_partial(call, text, audio_bytes, final, speaker, flush)
+    if not final:
+        _schedule_flush(call.pk)
+    return new
+
+
+def _process_partial(call: Call, text: str, audio_bytes: bytes | None, final: bool, speaker: str,
+                     flush: bool) -> list[Moment]:
     """One step of a live call: a new piece of transcript text, or a short audio chunk.
 
     Audio chunks are diarized with a streaming session that lives for the whole call, so "speaker 1" stays the
@@ -219,20 +277,20 @@ def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None
     backend = get_backend()
     pieces: list[Piece] = []
     chunk_start = call.duration
-    if audio_bytes:
-        samples = audio.decode(audio_bytes)
+    if audio_bytes or (flush and call.pk in _carry):
+        samples = audio.decode(audio_bytes) if audio_bytes else np.zeros(0, dtype=np.float32)
         chunk_end = chunk_start + len(samples) / TARGET_SR
-        session = live_session(call.pk)
+        session = live_session(call.pk, create=bool(audio_bytes))
         turns = []
         if session is not None:
-            turns = session.push(samples)
+            turns = session.push(samples) if len(samples) else session.turns()
             if final:
                 turns = session.finish()
                 close_live_session(call.pk)
         # Transcribe only up to the last pause; the rest waits for the next chunk so no word is cut in half.
         carry_start, carry = _carry.pop(call.pk, (chunk_start, np.zeros(0, dtype=np.float32)))
         buf = np.concatenate([carry, samples])
-        cut = _cut_at_pause(buf, final)
+        cut = _cut_at_pause(buf, final or flush)
         if cut < len(buf):
             _carry[call.pk] = (carry_start + cut / TARGET_SR, buf[cut:])
         ready_end = carry_start + cut / TARGET_SR
@@ -252,7 +310,7 @@ def process_partial(call: Call, text: str = "", audio_bytes: bytes | None = None
         all_turns = [(s.speaker, s.text) for s in call.segments.all()] + [(p.speaker, p.text) for p in pieces]
         if any(s for s, _ in all_turns):
             info = infer_roles([t for t in all_turns if t[0]], extract.get())
-            info["source"] = "diarization" if audio_bytes and get_diarizer() else "client"
+            info["source"] = "diarization" if (audio_bytes or flush) and get_diarizer() else "client"
             call.context["roles"] = info
         roles = call.context.get("roles", {}).get("roles", {})
         # A change of speaker ends the previous speaker's sentence.

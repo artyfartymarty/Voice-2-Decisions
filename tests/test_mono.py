@@ -157,3 +157,37 @@ def test_live_word_cut_across_chunks_is_reassembled(client, scripted):
     r2 = client.post(url, {"audio": SimpleUploadedFile("b.wav", wav_bytes(second)), "final": "true"}).json()
     assert [m["kind"] for m in r2["new_moments"]] == ["decision"]
     assert asr.lines == []  # one transcription for the whole utterance
+
+
+@pytest.mark.django_db
+def test_held_audio_is_flushed_without_waiting_for_final(client, scripted):
+    """Speech that runs to the end of a chunk is held back; the flush (timer) transcribes it without a new chunk."""
+    from copilot import pipeline
+    from tests.conftest import tone
+    import numpy as np
+    scripted(["We decided to go with the annual plan."])
+    call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
+    chunk = np.concatenate([np.zeros(8000, dtype=np.float32), tone(1.0)])  # speech up to the very end
+    r = client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("a.wav", wav_bytes(chunk))}).json()
+    assert r["new_moments"] == []
+    new = pipeline.flush_live_audio(call["id"])
+    assert [m.kind for m in new] == ["decision"]
+    assert pipeline.flush_live_audio(call["id"]) == []  # nothing left to flush
+
+
+@pytest.mark.django_db(transaction=True)
+def test_flush_timer_runs_in_the_background(client, scripted, settings):
+    import time
+    from tests.conftest import tone
+    import numpy as np
+    from copilot.models import Segment
+    settings.LIVE_FLUSH_S = 0.2
+    scripted(["Let's go with vendor B."])
+    call = client.post("/api/calls/live/", json.dumps({}), content_type="application/json").json()
+    chunk = np.concatenate([np.zeros(8000, dtype=np.float32), tone(1.0)])
+    client.post(f"/api/calls/{call['id']}/partial/", {"audio": SimpleUploadedFile("a.wav", wav_bytes(chunk))})
+    for _ in range(30):
+        if Segment.objects.filter(call_id=call["id"]).exists():
+            break
+        time.sleep(0.1)
+    assert Segment.objects.filter(call_id=call["id"]).values_list("text", flat=True)[0] == "Let's go with vendor B."
