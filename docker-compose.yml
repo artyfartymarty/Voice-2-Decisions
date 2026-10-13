@@ -1,75 +1,78 @@
-# CPU-safe base. On a GPU machine add the GPU overlay:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+# Voice-2-Decisions on one NVIDIA GPU: web app + speech service + Winnow-12B.
+# Models are read from ./models (run scripts/fetch_models.sh first; scripts/setup.sh does everything).
+#   docker compose up -d --build
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
 services:
-  # Speech service: NeMo-Speech.cpp with English Nemotron ASR Q8 + Nemotron diarization (used when ASR_BACKEND=nemo_speech)
+  # Speech: NVIDIA NeMo-Speech.cpp (prebuilt release from GitHub, SHA-pinned) serving English Nemotron ASR + Nemotron
+  # diarization on :8080 inside the network.
   asr:
+    <<: *gpu
     build: ./asr
     image: voice2decisions-asr:latest
     volumes:
-      - asr-models:/models   # pinned GGUFs, downloaded on first start (~0.8 GB)
+      - ./models:/models:ro
     restart: unless-stopped
 
-  # Sentiment model for the Customer Experience use case: Winnow (EldanRing/winnow-inference, pinned commit),
-  # built from source for the GPU architectures in CUDA_ARCH. WINNOW_TARGET: e2b (default, ~6 GB) or q8 (12B, ~13 GB).
-  winnow-download:
-    image: winnow-inference:a50c7d0
-    user: "0:0"
-    entrypoint: ["sh", "-c", "python3 scripts/winnow.py download --model $${WINNOW_TARGET:-e2b} --model-dir /models"]
-    environment:
-      WINNOW_TARGET: ${WINNOW_TARGET:-e2b}
-    volumes:
-      - winnow-models:/models
-
+  # Sentiment: Winnow-12B on winnow-server, built from EldanRing/winnow-inference on GitHub (pinned commit) for the
+  # GPU architecture in CUDA_ARCH (setup.sh sets it from nvidia-smi). Runs at 4K context: plenty for one call line,
+  # and it keeps the 12B inside VRAM.
   winnow:
+    <<: *gpu
     build:
       context: https://github.com/EldanRing/winnow-inference.git#a50c7d0d8cbc5c3ba34987c5c23ea114e44ce6b5
       args:
         CUDA_ARCH: ${CUDA_ARCH:-86;89;120}
     image: winnow-inference:a50c7d0
-    entrypoint: ["python3", "/wrap/serve.py"]
+    entrypoint: ["python3", "/wrap/serve.py", "--model", "q8"]
     environment:
-      WINNOW_TARGET: ${WINNOW_TARGET:-e2b}
-      WINNOW_CONTEXT: ${WINNOW_CONTEXT:-}   # empty = per model: 4096 for q8 (fits in VRAM), 8192 for e2b
+      WINNOW_CONTEXT: ${WINNOW_CONTEXT:-4096}
     volumes:
-      - winnow-models:/models:ro
+      - ./models/winnow:/models:ro
       - ./winnow:/wrap:ro
-    depends_on:
-      winnow-download:
-        condition: service_completed_successfully
     restart: unless-stopped
 
+  # Web app: Django UI + JSON API, use cases, live calls (streaming diarization from ./models/diar-hf, offline).
   web:
+    <<: *gpu
     build: .
     image: voice2decisions:latest
     env_file: .env
+    environment:
+      DIARIZER_MODEL_ID: /models/diar-hf
+      HF_HUB_OFFLINE: "1"
     depends_on:
       asr:
         condition: service_healthy
       winnow:
         condition: service_started   # sentiment falls back to the word list until Winnow is up
     ports:
-      - "${PORT:-8000}:8000"
+      - "${PORT:-8080}:8000"
     volumes:
-      - v2d-data:/data   # sqlite db + Hugging Face model cache, survives rebuilds
-      # Real reference data: uncomment, put customers.csv + location_notes.csv in ./reference, set REFERENCE_DIR=/reference
+      - v2d-data:/data
+      - ./models/diar-hf:/models/diar-hf:ro
+      # Real reference data: put customers.csv + location_notes.csv in ./reference, uncomment, set REFERENCE_DIR=/reference
       # - ./reference:/reference:ro
     restart: unless-stopped
 
-  # Test runner: docker compose run --rm test            (fast suite, no GPU or model needed)
-  #              docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm -e RUN_GPU_TESTS=1 test
+  # Fast test suite, no GPU or models: docker compose --profile test run --rm test
   test:
     image: voice2decisions:latest
     profiles: ["test"]
     environment:
       ASR_BACKEND: fake
       DATA_DIR: /data
-      HF_HOME: /data/hf
       SQLITE_PATH: /tmp/test.sqlite3
     volumes:
       - v2d-data:/data
-    command: ["pytest", "-v", "-rs"]
+    command: ["pytest", "-q", "-rs"]
 
 volumes:
   v2d-data:
-  asr-models:
-  winnow-models:

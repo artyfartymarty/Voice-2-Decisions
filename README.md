@@ -1,140 +1,112 @@
 # Voice-2-Decisions
 
-A call copilot. The main input is a **mono call recording** (or a live stream of mono chunks):
+A live call copilot. A mono call recording or stream goes in; it works out who's speaking (agent / caller), transcribes,
+and fires three use cases while the call is happening:
 
-```
-mono audio ─► Nemotron Diarization ─► Nemotron ASR per turn ─► agent / caller roles ─► winnow ─► tool calls ─► UI / API / alerts
-             (who spoke when)          (what they said)          (from what they say)    (what matters)
-```
-
-- **Nemotron 3 Diarization** (`nvidia/Nemotron-3-Diarization`, streaming Sortformer) separates the speakers. It
-  runs in streaming mode, so a live call keeps the same speaker IDs from chunk to chunk.
-- **Nemotron 3.5 ASR** (`nvidia/nemotron-3.5-asr-streaming-0.6b`) transcribes each speaker turn.
-- **Roles** (`copilot/roles.py`) decide which diarized speaker is the agent and which is the caller, from what
-  they say. The agent greets, looks things up and quotes; the caller names their company, says where they're
-  flying and asks for a price.
-- **winnow** (`copilot/winnow.py`) picks out decisions, action items, risks, questions and key moments. It also
-  runs the three use cases below. Each finding becomes a tool call.
-
-Two separate leg files still work, and each leg is then a speaker. That path is optional; mono is the main one.
-
-For setting it up on EC2, read **[HANDOFF.md](HANDOFF.md)**.
-
-## The three use cases, built to their Pattern
-
-| Category | Pattern | Trigger | Tool | What it returns |
-|---|---|---|---|---|
-| GP | Static only, Customer and Location required | quote intent, and both customer and location known | `quote_lookup` (flat-file lookup, no model) | addressable and total volume at the quoted location, other locations the customer operates at, margin reduction range (CURRENT to MIN GPPG); **dispatcher alerted** asking for feedback on the quoted price. Outcome: addressable volume checked and **fed back to Yield** when off; **margin flagged high** with a revised mid-range price |
-| Avoiding Disputes | Single key word, static data search | a location in play plus a keyword (quote, fee, price, callout...) | `dispute_guidance` (notes + dispute list, no model) | fires when the location or the customer is dispute-prone (with rank); prompt to restate fees, and written quote wording. Outcome: get ahead of a credit or rebill |
-| Customer Experience | Sentiment and orchestration | a speaker's sentiment turns negative | `alert_manager` (**sentiment model: Winnow** `/v1/systemone`, lexicon fallback) | prompt to the agent on the call, real-time alert to the designated managers / leads (`MANAGER_WEBHOOKS`) |
-
-Each result carries a card with the sheet's columns: **Who** (always Customer), **Want to see, Outcome, Category**, plus Pattern and who was alerted. The
-summary returns them as `use_cases`, and the call page shows them as a table.
-
-Reference data comes from flat files in `REFERENCE_DIR`, with the same columns as the work exports. `disputes.csv`, `fleet.csv` and `airport_aliases.csv` are optional and synthetic here:
-- `customers.csv`: CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
-- `location_notes.csv`: ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (messy HTML is fine)
-
-`fixtures/reference/` holds **synthetic** samples in those shapes; none of it is real customer data. Alerts are
-logged, and also POSTed to `NOTIFY_WEBHOOK_URL` when that is set, for example a Slack or Teams webhook.
-
-## Tool arguments without an LLM
-
-The decider only picks *which* tool fires. The arguments come from `copilot/extract.py` and `copilot/slots.py`,
-which are deterministic, about 2.5 ms p95 per update on CPU, and can only return values from the reference data or
-a strict grammar:
-
-- **Customers:** account numbers (written or spoken digit by digit) or names, matched fuzzily and phonetically
-  against customers.csv ("North Wind aviation" → NORTHWIND AVIATION, LLC). They can also be pre-filled at call
-  start with `customer_id` (from the phone system's ANI lookup).
-- **Locations:** ICAO and IATA codes, also spelled ("K T E B") or in the phonetic alphabet. FBO names come from
-  the notes; airport and city names come from `airport_aliases.csv`, fuzzy ("Teeterborough" → KTEB).
-- **Tail numbers:** registration grammar per country, with phonetic alphabet and spoken digits ("November five one
-  two bravo tango" → N512BT). A per-call slot handles cut-offs, re-asks ("sorry, what was the tail again?"),
-  spelling spread over several breaths, and corrections ("no, B T, not B D"). `validate_tail_number` fires only
-  for a complete, confident value, or one found in the customer's fleet (`fleet.csv`). Anything less becomes an
-  **agent prompt** ("Tail number incomplete, ask the caller to repeat it. On file: N512BT").
-- **Word boost:** `GET /api/boost-words/` lists the same names and codes, to feed the ASR's word-boost list.
-
-## Quick start (Docker, GPU)
-
-```bash
-cp .env.example .env            # then set DJANGO_SECRET_KEY
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-curl "http://localhost:8000/healthz?load=1"     # downloads both models on first run (~3 GB), then reports the GPU
-```
-
-Open http://localhost:8000 to test with a recording: drop in a WAV file or click one of the test calls
-(`TEST_CALLS_DIR`, default `tests/fixtures`). It plays in the browser and is streamed to the server in 1-5 s chunks
-at the pace it plays (0.5-4x), as a live call, so the transcript, prompt cards and alerts fill in as you listen. The
-same page still uploads a whole recording or records live from the microphone.
-
-## Tests
-
-```bash
-docker compose --profile test run --rm test python scripts/check.py   # everything without a GPU, PASS/FAIL per step
-docker compose exec web python scripts/check.py --stack          # plus `manage.py doctor --golden` on the real models
-docker compose --profile test run --rm test                      # fast suite, no GPU or model needed
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile test run --rm -e RUN_GPU_TESTS=1 test pytest -v -s -rs tests/test_gpu_nemotron.py
-docker compose exec web sh scripts/smoke_test.sh                 # end to end against the running server
-docker compose exec web python manage.py eval_speakers /path/call.wav   # needs call.truth.json next to it
-```
-
-## API
-
-| Method | Path | What it does |
+| Category | What the call handler gets | How |
 |---|---|---|
-| GET | `/healthz` (`?load=1` loads the models) | ASR + diarizer status, GPU, registered tools |
-| POST | `/api/calls/` multipart `audio` (mono), optional `audio_b` + `speaker_a`/`speaker_b` for two legs, `title` | process a recording → transcript with speakers, moments, tool results (201) |
-| GET | `/api/calls/<id>/` | full call: segments with speaker and role, moments, context |
-| GET | `/api/calls/<id>/summary/` | headline, counts, decisions, action items, risks, questions, quotes, dispute warnings, sentiment alerts, speaker roles |
-| POST | `/api/calls/live/` JSON `{"title"}` | start a live call |
-| POST | `/api/calls/<id>/partial/` multipart `audio` chunk (+ `final`), or JSON `{"text", "speaker", "final"}` | feed a live call; returns new moments and the current speaker roles |
-| GET | `/calls/<id>/` | the call page: who's calling, tail-number hint, prompt cards per use case, live transcript, summary when the call ends |
-| GET | `/calls/<id>/panels/` (`?v=<version>`) | the call page's panels as HTML for the live script; 204 when nothing changed |
-| GET | `/alerts/` (`?live=1`) | manager alert view: sentiment and quote alerts across calls, newest first |
+| GP | Customer asks for a quote: addressable volume at that location, the margin range to come down within, dispatcher alerted | static lookup on customer + location |
+| Avoiding Disputes | Quoting a dispute-prone location or customer: restate the fees, plus wording for the written quote | keyword + notes / dispute list |
+| Customer Experience | Caller or agent turning negative: on-call prompt, managers alerted in real time | **Winnow-12B** sentiment + alert routing |
 
-While a call is live the call page refreshes its panels every `LIVE_REFRESH_MS` (1.5 s). Set `GATEWAY_WS_URL` to a
-WebSocket that announces call updates and the page also refreshes on each message.
+Three containers on one NVIDIA GPU: **web** (Django UI + API, :8080), **asr** (NVIDIA NeMo-Speech.cpp: English
+Nemotron ASR + Nemotron diarization), **winnow** (Winnow-12B). Deeper notes, measured results and troubleshooting are in
+[HANDOFF.md](HANDOFF.md).
 
-CLI: `python manage.py process_call recording.wav [--full]` prints the summary as JSON.
+## Quick start on AWS (about five commands)
 
-## Layout
-
-| Path | Role |
-|---|---|
-| `copilot/diarize.py` | Nemotron Diarization in streaming mode; one session per live call |
-| `copilot/asr.py` | Nemotron ASR (utterance-segmented), `FakeASR` for tests |
-| `copilot/roles.py` | names diarized speakers agent / caller from their words |
-| `copilot/winnow.py` | the decision engine: clause splitting, rules, per-speaker sentiment, call context (customer, location, quote intent) |
-| `copilot/reference.py` | loads the two flat files, cleans the notes HTML, finds customers and locations in speech |
-| `copilot/usecases.py` | `quote_lookup`, `dispute_guidance`, `alert_manager`, and `notify()` |
-| `copilot/tools.py` | tool registry; calls to tools that don't exist yet stay `pending` and are replayed later |
-| `copilot/pipeline.py` | glue for recordings and live calls |
-| `copilot/evaluation.py` | role-attribution accuracy against hand-labeled turns |
-| `tests/fixtures/` | synthesized calls: `sample_call.wav`; the quote call as two legs, as clean mono, and as phone-quality mono, each with `.truth.json` |
-
-## Accuracy and limits
-
-- **Speaker attribution** was measured on the synthesized quote call (two TTS voices) with the real models; see
-  HANDOFF.md for the numbers. Real calls are harder: similar voices, crosstalk, very short replies like
-  "yeah" or "ok", and hold music. Expect lower numbers there, and measure them with `eval_speakers` on a few
-  hand-labeled calls before trusting the alerts.
-- **Roles** come from content. A call with no greeting and no quote request gives weak evidence, and the summary
-  then reports `speaker_roles_confident: false`. Labels fall back to "whoever spoke first is the agent".
-- **winnow** is rule based (regex and lexicon), so it's fast, deterministic and testable, but it only catches
-  phrasings its rules cover. Its rules are in `copilot/winnow.py` and `copilot/roles.py`.
-- Live mode transcribes each chunk separately, so a word cut at a chunk boundary can be misheard.
-- Microphone capture in the browser needs `localhost` or HTTPS.
-- Requests run synchronously in one gunicorn worker with 4 threads, and the models are shared under locks. Live
-  diarization sessions live in that worker's memory, so keep `--workers 1`.
-
-## Running without Docker
-
-Python 3.12, ffmpeg on PATH, then:
+**Instance:** `g5.2xlarge` (A10G 24 GB) · **AMI:** *Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)* ·
+**Disk:** 100 GB · **Security group:** SSH only.
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
-pip install -r requirements.txt -r requirements-dev.txt
-python manage.py migrate && python manage.py runserver
+# 1. on the instance
+git clone https://github.com/artyfartymarty/Voice-2-Decisions.git && cd Voice-2-Decisions
+# 2. check GPU + driver, write .env, get models (~14 GB), build, start, run the checks
+./scripts/setup.sh
 ```
+
+The repo is private: for the clone, use `gh auth login` first or
+`git clone https://<your-github-token>@github.com/artyfartymarty/Voice-2-Decisions.git`.
+
+```bash
+# 3. on your laptop: tunnel to the UI
+ssh -L 8080:localhost:8080 ubuntu@<instance-public-dns>
+# 4. open http://localhost:8080 and click a test call (or drop your own WAV); it streams like a live call
+```
+
+`setup.sh` ends with `check.py --stack`, which must print `check: all passed`. The first run takes a while: the model
+download, plus compiling Winnow for your GPU (`CUDA_ARCH` is set automatically from `nvidia-smi`).
+
+## Test with a WAV file
+
+- **In the browser:** the start page lists `tests/fixtures/*.wav`. Click one, or drop a WAV, and it plays and streams in
+  real time while the transcript, prompts and alerts fill in.
+- **From the instance:**
+
+```bash
+docker compose exec web python scripts/stream_wav.py tests/fixtures/quote_call_phone_mono.wav --chunk 2
+# copy your own: scp call.wav ubuntu@<instance>:Voice-2-Decisions/  then
+docker compose cp call.wav web:/tmp/call.wav && docker compose exec web python scripts/stream_wav.py /tmp/call.wav
+```
+
+It prints per-chunk latency and when each use case fired. Expect ~0.1–0.2 s per 2 s chunk.
+
+## Use your own model files instead of downloading
+
+By default `scripts/fetch_models.sh` (run by `setup.sh`) downloads the weights from their publishers (the weights are
+only published on Hugging Face; the runtimes come from GitHub). To use files you copy in yourself, put them in this
+exact layout under `./models` and tell the script not to download:
+
+```
+models/
+├── winnow/gguf/Winnow-12B-Q8_0.gguf                     12669646592 bytes  sha256 b710efc4c0d048ee61eed92c5fef5ce323a4d17e7c51f9f0533cc72ae50818ea
+├── asr/nemotron-speech-streaming-en-0.6b.q8_0.gguf        699872960 bytes  sha256 d9a01898d2a611c8764e23a1c2f45e70bbd5a425dc4de93692ac951dd603812d
+├── diar/Nemotron-3-Diarization.q8_0.gguf                  107012128 bytes  sha256 08456d9e22cd9a323c0364d98375f3746d6e68507ebb705cd46438c534c7a3a1
+└── diar-hf/
+    ├── model.safetensors                                  396954592 bytes  sha256 c074d86335b3b794f8fa5edc25594558f128bdb3914d27806a3a5a2e44963cb6
+    ├── config.json                                             1458 bytes  sha256 dd795ec07ffa09acf18d231aa3fa8642aa5c521760953754e02559a7413b6873
+    └── processor_config.json                                    623 bytes  sha256 91726746788a024a2f0f2f699a6c3667f0d74e6a0e9288fc44fe3018e23af68e
+```
+
+**1. Get the files onto the instance**, any way you like:
+
+```bash
+# from your laptop (the folder you have locally, in the layout above)
+scp -r models ubuntu@<instance>:Voice-2-Decisions/
+# or from an S3 bucket laid out the same way
+aws s3 cp --recursive s3://<bucket>/v2d-models/ models/
+```
+
+**2. Switch off downloading** in `.env`:
+
+```
+MODELS_SOURCE=local
+```
+
+**3. Run `./scripts/setup.sh` as usual.** With `MODELS_SOURCE=local` it never downloads. It checks each file's
+size and SHA-256 against `models.lock`, prints `MISSING` or `BAD` for anything wrong (with the expected size and hash),
+and stops before building. Check by hand any time with `MODELS_SOURCE=local scripts/fetch_models.sh`.
+
+Other ways to point at your files:
+- **A mirror URL for everything:** `MODEL_BASE_URL=https://<bucket>.s3.amazonaws.com/v2d-models`. Each file is
+  fetched from `<base>/<path above>` and checksummed.
+- **One file elsewhere:** `MODEL_URL_WINNOW_12B=https://...` (also `MODEL_URL_ASR_EN`, `MODEL_URL_DIAR_GGUF`,
+  `MODEL_URL_DIAR_HF_WEIGHTS`, `MODEL_URL_DIAR_HF_CONFIG`, `MODEL_URL_DIAR_HF_PROCESSOR`).
+- **Files already present and correct** are always reused, in every mode: only missing or bad files are fetched.
+
+The pinned sources, sizes and hashes live in [`models.lock`](models.lock); licenses are in
+[MODEL_LICENSES.md](MODEL_LICENSES.md) (Apache-2.0, NVIDIA Open Model License, OpenMDW-1.1; all allow redistribution
+with the license attached).
+
+## Everyday commands
+
+```bash
+docker compose ps                                   # status
+docker compose logs -f web asr winnow               # logs
+docker compose exec web python scripts/check.py --stack   # health check on the real models
+docker compose --profile test run --rm test         # fast test suite (no GPU)
+./scripts/setup.sh --skip-build                     # after a reboot: verify models, start, check
+docker compose down                                 # stop
+```
+
+Real reference data (customers, location notes) instead of the synthetic samples: see HANDOFF.md, step 3.

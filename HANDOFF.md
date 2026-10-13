@@ -1,160 +1,44 @@
-# Handoff: run Voice-2-Decisions on EC2 and test it
+# Handoff: Voice-2-Decisions on EC2
 
-Instructions for the person or agent setting this up. Follow the steps in order; each lists the command and what
-success looks like. Everything here was run on the author's machine (RTX 5070 Ti 16 GB, Docker Desktop) on
-2026-10-12/13. The measured results are in section 8.
+For the person or agent setting this up. **Setup is in the [README](README.md):** clone, run `./scripts/setup.sh`,
+tunnel to :8080. This file holds what's behind it: how the pieces fit, what was measured, how to troubleshoot, and
+reference material.
 
 ## What runs
 
-Three containers, started by one `docker compose` command:
-
 | Service | What it is | GPU memory |
 |---|---|---|
-| `asr` | NVIDIA NeMo-Speech.cpp v0.2.0 (prebuilt CUDA archive, SHA-pinned) serving English Nemotron ASR Q8 and Nemotron 3 Diarization Q8 on :8080 | ~1.5 GB |
-| `winnow` | Winnow (EldanRing/winnow-inference @ a50c7d0, built from source): sentiment for the Customer Experience use case on :8091 | E2B ~6 GB / 12B ~13 GB |
-| `web` | Django UI + JSON API (Python 3.12, gunicorn) on :8000: speaker roles, winnow rules, the three use-case tools, live streaming diarization | ~1 GB |
+| `asr` | NVIDIA NeMo-Speech.cpp v0.2.0 (prebuilt CUDA archive from GitHub, SHA-pinned; kernels for sm_75/86/89/120) serving English Nemotron ASR Q8 + Nemotron 3 Diarization Q8 on :8080 inside the network | ~1.5 GB |
+| `winnow` | Winnow-12B Q8 on winnow-server (EldanRing/winnow-inference @ a50c7d0, built from GitHub source for `CUDA_ARCH`) at 4K context: sentiment for Customer Experience, on :8091 | ~12.5 GB |
+| `web` | Django UI + JSON API (Python 3.12, gunicorn, host port 8080): speaker roles, winnow rules, the use-case tools, live streaming diarization (Nemotron-3-Diarization from `./models/diar-hf`, offline) | ~1 GB |
 
-Models download on first start into Docker volumes and are checked against pinned SHA-256s.
+All model files live in `./models` on the host (see README, "Use your own model files"). Nothing downloads at
+container start.
 
-## 0. What you need
+## Choosing an instance
 
-- **EC2 GPU instance.** `g6.xlarge` (L4 24 GB) or `g6e.xlarge` (L40S 48 GB) are the expected choices; `g5.xlarge`
-  (A10G 24 GB) also works. With Winnow-12B (`WINNOW_TARGET=q8`), use a 24 GB+ card.
-- **AMI:** "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04 or 24.04)". It ships driver 595, Docker and
-  the NVIDIA Container Toolkit. **Do not use the ECS GPU AMI**: its driver (550) is too old. The driver must be
-  **580 or newer**, because the Winnow image is built on CUDA 13.0.
-- **Disk:** at least 80 GB on the root volume. The images are about 25 GB and the models about 7 GB with E2B, or
-  20 GB with 12B. The Winnow build also needs room for its compiler image.
-- **Outbound HTTPS** to Docker Hub, GitHub, PyPI and huggingface.co, for the build and the first model download.
-- **Inbound:** SSH. For the UI, either open TCP 8000 to your IP or use an SSH tunnel (step 6).
+- **`g5.2xlarge` (A10G 24 GB): the target.** Whole stack is about 15 GB of VRAM with no display attached, so it
+  fits with headroom.
+- `g6.xlarge`/`g6e.xlarge` (L4 24 GB / L40S 48 GB) also work; `setup.sh` sets `CUDA_ARCH=89`.
+- `g4dn.xlarge` (T4 16 GB) runs every component (sm_75 kernels everywhere, float16 instead of bfloat16), but 12B
+  plus speech is tight on 16 GB. Expect slower sentiment and keep nothing else on the GPU.
+- **AMI:** Deep Learning Base OSS Nvidia Driver GPU AMI (driver 595). Not the ECS GPU AMI: its driver 550 is too
+  old (Winnow is built on CUDA 13, which needs 580+).
+- **Disk:** 100 GB. Images are ~25 GB, models ~14 GB, plus the Winnow build cache.
 
-## 1. Get the code onto the instance
+## What `setup.sh` does
 
-```bash
-git clone https://github.com/artyfartymarty/Voice-2-Decisions.git
-cd Voice-2-Decisions
-```
+1. Checks `nvidia-smi`: driver 580+, GPU memory, and `compute_cap`, which becomes `CUDA_ARCH` (8.6 → 86).
+2. Checks Docker can see the GPU (NVIDIA Container Toolkit).
+3. Writes `.env` from `.env.example` with a fresh secret key (an existing `.env` is kept; only `CUDA_ARCH` updates).
+4. `scripts/fetch_models.sh`: downloads missing model files from `models.lock`, verifying size + SHA-256. With
+   `MODELS_SOURCE=local` it only verifies files you copied in.
+5. `docker compose build`, then `docker compose up -d`. The first Winnow build compiles CUDA kernels for your GPU
+   (several minutes).
+6. `check.py --stack`: settings, migrations, fast tests, then `doctor --golden` on the real models. Must end in
+   `check: all passed`.
 
-If you received the files directly instead, as plain files and not a zip, copy the folder up with `scp -r` or
-`rsync` and `cd` into it.
-
-## 2. Check the GPU is visible to Docker, and note its architecture
-
-```bash
-nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv
-docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi
-```
-
-The driver should be 580 or newer. `compute_cap` gives the architecture: 8.6 is A10G (g5), 8.9 is L4/L40S
-(g6/g6e), and 12.0 is Blackwell (g7e, RTX 50-series). If the second command fails, install the NVIDIA Container
-Toolkit:
-
-```bash
-sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
-```
-
-## 3. Configure
-
-```bash
-cp .env.example .env
-sed -i "s|^DJANGO_SECRET_KEY=.*|DJANGO_SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')|" .env
-```
-
-- `CUDA_ARCH`: the default `86;89;120` builds Winnow for all three GPU families. To build faster, set only
-  yours, for example `CUDA_ARCH=89` on g6/g6e (compute_cap 8.9 → 89).
-- `WINNOW_TARGET`: `e2b` fits beside the speech models on 16 GB. On a 24 GB+ card (g5, g6, g6e) use `q8`
-  (Winnow-12B), which catches all frustrated lines in the test set, not 8 of 10. Leave `WINNOW_CONTEXT` empty
-  (12B then runs at 4K, which keeps it inside VRAM).
-- To use the real reference exports instead of the synthetic samples, put `customers.csv` and
-  `location_notes.csv` in `./reference`, plus `disputes.csv`, `fleet.csv` and `airport_aliases.csv` if you have
-  them. Then uncomment the `./reference:/reference:ro` line in `docker-compose.yml` and set
-  `REFERENCE_DIR=/reference`.
-- To reach the UI by the instance's address, also set:
-
-```
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,<public-dns-or-ip>
-DJANGO_CSRF_TRUSTED_ORIGINS=http://<public-dns-or-ip>:8000
-```
-
-## 4. Build and start
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
-docker compose ps
-curl -s "http://localhost:8000/healthz?load=1"
-```
-
-The first build compiles Winnow, which takes several minutes. The first start downloads the models. Success:
-- `docker compose ps` shows `asr` and `web` as healthy and `winnow` as running.
-- `healthz` reports `"backend": "nemo_speech"` with `"ready": true` and `"capabilities": ["asr", "diarization"]`,
-  and the diarizer shows `"device": "cuda:0"`.
-- `curl -s localhost:8091/health` from inside the network (`docker compose exec web curl -s winnow:8091/health`)
-  returns `{"status":"ok"}`.
-
-## 5. Run the tests
-
-One command checks everything with a PASS/FAIL line per step and exits non-zero on any failure:
-
-```bash
-docker compose --profile test run --rm test python scripts/check.py   # code only, no GPU
-docker compose exec web python scripts/check.py --stack                # plus doctor --golden on the real models
-```
-
-`python manage.py doctor` (part of `--stack`) checks config, secret key, migrations, reference data, GPU and
-driver, the speech service, Winnow, and probes the speech model with two turns of a test call. It fails if the
-text is empty, the same for both turns, or the fake model's canned paragraph. `--golden` also streams the golden
-calls in `tests/golden/calls.json` through the live path and checks the tool calls each one must fire.
-
-The server also refuses to start with `ASR_BACKEND=fake` or `DIARIZER=fake` unless `ALLOW_FAKE_BACKEND=1` is set,
-and a live call gets a `warnings` entry (in the partial response, the call and the summary) when the transcript
-repeats the same text 3 times in a row or speech comes back empty 3 times in a row.
-
-The individual steps:
-
-```bash
-# a) Fast suite: rules, extractor, tail slot, use cases, API, live carry, clients (servers mocked). No GPU.
-#    Expect: all passed, a handful skipped (the GPU tests).
-docker compose --profile test run --rm test
-
-# b) Real models on the GPU (Transformers path, Nemotron diarization, speech service). Expect: all passed.
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile test run --rm -e RUN_GPU_TESTS=1 test \
-  pytest -v -s -rs tests/test_gpu_nemotron.py
-
-# c) End to end against the running stack: upload, live chunks, mono quote call with all use cases.
-#    Expect: SMOKE TEST PASSED
-docker compose exec web sh scripts/smoke_test.sh
-
-# d) Simulated live call: stream a mono WAV in real time and measure latency. Expect: p95 well under 1 s,
-#    and quote_request, dispute_risk and sentiment_shift in first_fired.
-docker compose exec web python scripts/stream_wav.py tests/fixtures/quote_call_phone_mono.wav --chunk 2
-
-# e) Sentiment model vs word list on 30 labeled call lines. Expect winnow accuracy around 0.9 or higher.
-docker compose exec web python scripts/eval_sentiment.py
-
-# f) Your own calls: speaker accuracy against hand-labeled turns (call.wav + call.truth.json side by side).
-docker compose exec web python manage.py eval_speakers /path/in/container/call.wav
-```
-
-To stream your own WAVs (16-bit PCM, any rate), copy them in and run `stream_wav.py` on them. The live API is HTTP
-chunked: `POST /api/calls/live/`, then `POST /api/calls/<id>/partial/` with `audio` chunks and `final=true` on the last.
-
-## 6. Open the UI
-
-- Tunnel: `ssh -L 8000:localhost:8000 ubuntu@<instance>`, then browse http://localhost:8000. The microphone live
-  mode works this way, because browsers only allow the mic on localhost or HTTPS.
-- Direct: http://<public-dns-or-ip>:8000. This needs the extra settings from step 3 and port 8000 open. Upload
-  works, but the microphone doesn't over plain HTTP.
-
-## 7. Day-2 commands
-
-```bash
-docker compose logs -f web asr winnow            # logs
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # redeploy after a change
-docker compose exec web python manage.py process_call /path/in/container.wav  # CLI: one call -> summary JSON
-docker compose down                               # stop (volumes with models and db are kept)
-```
-
-## 8. Measured results (RTX 5070 Ti, synthesized test calls)
+## Measured results (RTX 5070 Ti, synthesized test calls)
 
 | What | Result |
 |---|---|
@@ -169,13 +53,13 @@ docker compose down                               # stop (volumes with models an
 | Cold start | first live request no longer waits: models warm up at server start (~17 s, in the background) |
 | `scripts/check.py --stack` | settings, migrations, tests, doctor all PASS; golden quote call fires quote_lookup, dispute_guidance, alert_manager |
 | Entity extraction (customer, location, tail number) | 2.6 ms p95 per transcript update, CPU |
-| GPU memory, whole stack with Winnow-E2B | about 8.5 GB on top of the desktop |
+| GPU memory, whole stack with Winnow-12B (4K) | ~13.5 GB on top of the desktop. On the 16 GB dev card that also drives monitors it left too little for the displays and slowed to ~0.6 s per sentiment line; the 24 GB g5 has headroom |
 
 These are synthesized TTS calls, which are easier than real phone audio (crosstalk, similar voices, hold music).
 Measure real calls with step 5f and `stream_wav.py` before relying on the alerts.
 
-Not yet measured: the whole stack with Winnow-12B on a 24 GB card (the 16 GB dev card can't hold 12B next to the
-speech models). On EC2, run step 5e after switching `WINNOW_TARGET=q8`.
+Not yet measured: the whole stack with Winnow-12B on a 24 GB card. Run `check.py --stack`, `eval_sentiment.py` and
+`stream_wav.py` on the g5 and compare with the table.
 
 ## Knowledge graph (graphify)
 
@@ -200,14 +84,101 @@ changed templates get their semantic pass too.
 
 | Symptom | Fix |
 |---|---|
-| `could not select device driver "nvidia"` | NVIDIA Container Toolkit missing; see step 2 |
-| `CUDA driver version is insufficient` / winnow exits at start | driver older than 580; use the Deep Learning Base AMI, not the ECS GPU AMI |
-| winnow fails with "no kernel image is available" | its build didn't include your GPU: set `CUDA_ARCH` from compute_cap and `up -d --build` |
-| `healthz` shows `"cuda": false` | started without `-f docker-compose.gpu.yml` |
-| sentiment says `lexicon (winnow unavailable)` | winnow not up yet or out of memory: `docker compose logs winnow`; on 16 GB keep `WINNOW_TARGET=e2b` |
-| `DisallowedHost` / 400 on the public URL | add the host to `DJANGO_ALLOWED_HOSTS`, then `docker compose up -d` |
-| 403 CSRF on the upload form | set `DJANGO_CSRF_TRUSTED_ORIGINS` to the exact origin you browse to |
-| model download fails | check outbound HTTPS to huggingface.co and github.com |
+| `setup.sh`: driver older than 580 | use the Deep Learning Base OSS Nvidia Driver GPU AMI (driver 595), not the ECS GPU AMI |
+| `Docker can't see the GPU` | `sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
+| `MISSING` / `BAD` from fetch_models.sh | copy the file to the path shown (README, "Use your own model files"), or unset `MODELS_SOURCE=local` to download it |
+| `asr` exits with "missing /models/..." | models aren't in `./models`; run `scripts/fetch_models.sh` |
+| winnow logs "no kernel image is available" | it was built for another GPU: fix `CUDA_ARCH` in `.env` (from compute_cap) and `docker compose build winnow` |
+| sentiment says `lexicon (winnow unavailable)` | winnow still loading or out of memory: `docker compose logs winnow`; keep `WINNOW_CONTEXT=4096` |
+| everything slow, GPU memory near full | something else is on the GPU (or a display on a 16 GB card): 12B + speech needs ~15 GB |
+| `DisallowedHost` / CSRF 403 on a public URL | use the SSH tunnel, or add the host to `DJANGO_ALLOWED_HOSTS` and `DJANGO_CSRF_TRUSTED_ORIGINS` |
+
+## Reference (moved from the README)
+
+### The three use cases, built to their Pattern
+
+| Category | Pattern | Trigger | Tool | What it returns |
+|---|---|---|---|---|
+| GP | Static only, Customer and Location required | quote intent, and both customer and location known | `quote_lookup` (flat-file lookup, no model) | addressable and total volume at the quoted location, other locations the customer operates at, margin reduction range (CURRENT to MIN GPPG); **dispatcher alerted** asking for feedback on the quoted price. Outcome: addressable volume checked and **fed back to Yield** when off; **margin flagged high** with a revised mid-range price |
+| Avoiding Disputes | Single key word, static data search | a location in play plus a keyword (quote, fee, price, callout...) | `dispute_guidance` (notes + dispute list, no model) | fires when the location or the customer is dispute-prone (with rank); prompt to restate fees, and written quote wording. Outcome: get ahead of a credit or rebill |
+| Customer Experience | Sentiment and orchestration | a speaker's sentiment turns negative | `alert_manager` (**sentiment model: Winnow** `/v1/systemone`, lexicon fallback) | prompt to the agent on the call, real-time alert to the designated managers / leads (`MANAGER_WEBHOOKS`) |
+
+Each result carries a card with the sheet's columns: **Who** (always Customer), **Want to see, Outcome, Category**, plus Pattern and who was alerted. The
+summary returns them as `use_cases`, and the call page shows them as a table.
+
+Reference data comes from flat files in `REFERENCE_DIR`, with the same columns as the work exports. `disputes.csv`, `fleet.csv` and `airport_aliases.csv` are optional and synthetic here:
+- `customers.csv`: CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
+- `location_notes.csv`: ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (messy HTML is fine)
+
+`fixtures/reference/` holds **synthetic** samples in those shapes; none of it is real customer data. Alerts are
+logged, and also POSTed to `NOTIFY_WEBHOOK_URL` when that is set, for example a Slack or Teams webhook.
+
+### Tool arguments without an LLM
+
+The decider only picks *which* tool fires. The arguments come from `copilot/extract.py` and `copilot/slots.py`,
+which are deterministic, about 2.5 ms p95 per update on CPU, and can only return values from the reference data or
+a strict grammar:
+
+- **Customers:** account numbers (written or spoken digit by digit) or names, matched fuzzily and phonetically
+  against customers.csv ("North Wind aviation" → NORTHWIND AVIATION, LLC). They can also be pre-filled at call
+  start with `customer_id` (from the phone system's ANI lookup).
+- **Locations:** ICAO and IATA codes, also spelled ("K T E B") or in the phonetic alphabet. FBO names come from
+  the notes; airport and city names come from `airport_aliases.csv`, fuzzy ("Teeterborough" → KTEB).
+- **Tail numbers:** registration grammar per country, with phonetic alphabet and spoken digits ("November five one
+  two bravo tango" → N512BT). A per-call slot handles cut-offs, re-asks ("sorry, what was the tail again?"),
+  spelling spread over several breaths, and corrections ("no, B T, not B D"). `validate_tail_number` fires only
+  for a complete, confident value, or one found in the customer's fleet (`fleet.csv`). Anything less becomes an
+  **agent prompt** ("Tail number incomplete, ask the caller to repeat it. On file: N512BT").
+- **Word boost:** `GET /api/boost-words/` lists the same names and codes, to feed the ASR's word-boost list.
+
+### API
+
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/healthz` (`?load=1` loads the models) | ASR + diarizer status, GPU, registered tools |
+| POST | `/api/calls/` multipart `audio` (mono), optional `audio_b` + `speaker_a`/`speaker_b` for two legs, `title` | process a recording → transcript with speakers, moments, tool results (201) |
+| GET | `/api/calls/<id>/` | full call: segments with speaker and role, moments, context |
+| GET | `/api/calls/<id>/summary/` | headline, counts, decisions, action items, risks, questions, quotes, dispute warnings, sentiment alerts, speaker roles |
+| POST | `/api/calls/live/` JSON `{"title"}` | start a live call |
+| POST | `/api/calls/<id>/partial/` multipart `audio` chunk (+ `final`), or JSON `{"text", "speaker", "final"}` | feed a live call; returns new moments and the current speaker roles |
+| GET | `/calls/<id>/` | the call page: who's calling, tail-number hint, prompt cards per use case, live transcript, summary when the call ends |
+| GET | `/calls/<id>/panels/` (`?v=<version>`) | the call page's panels as HTML for the live script; 204 when nothing changed |
+| GET | `/alerts/` (`?live=1`) | manager alert view: sentiment and quote alerts across calls, newest first |
+
+While a call is live the call page refreshes its panels every `LIVE_REFRESH_MS` (1.5 s). Set `GATEWAY_WS_URL` to a
+WebSocket that announces call updates and the page also refreshes on each message.
+
+CLI: `python manage.py process_call recording.wav [--full]` prints the summary as JSON.
+
+### Layout
+
+| Path | Role |
+|---|---|
+| `copilot/diarize.py` | Nemotron Diarization in streaming mode; one session per live call |
+| `copilot/asr.py` | Nemotron ASR (utterance-segmented), `FakeASR` for tests |
+| `copilot/roles.py` | names diarized speakers agent / caller from their words |
+| `copilot/winnow.py` | the decision engine: clause splitting, rules, per-speaker sentiment, call context (customer, location, quote intent) |
+| `copilot/reference.py` | loads the two flat files, cleans the notes HTML, finds customers and locations in speech |
+| `copilot/usecases.py` | `quote_lookup`, `dispute_guidance`, `alert_manager`, and `notify()` |
+| `copilot/tools.py` | tool registry; calls to tools that don't exist yet stay `pending` and are replayed later |
+| `copilot/pipeline.py` | glue for recordings and live calls |
+| `copilot/evaluation.py` | role-attribution accuracy against hand-labeled turns |
+| `tests/fixtures/` | synthesized calls: `sample_call.wav`; the quote call as two legs, as clean mono, and as phone-quality mono, each with `.truth.json` |
+
+### Accuracy and limits
+
+- **Speaker attribution** was measured on the synthesized quote call (two TTS voices) with the real models; see
+  HANDOFF.md for the numbers. Real calls are harder: similar voices, crosstalk, very short replies like
+  "yeah" or "ok", and hold music. Expect lower numbers there, and measure them with `eval_speakers` on a few
+  hand-labeled calls before trusting the alerts.
+- **Roles** come from content. A call with no greeting and no quote request gives weak evidence, and the summary
+  then reports `speaker_roles_confident: false`. Labels fall back to "whoever spoke first is the agent".
+- **winnow** is rule based (regex and lexicon), so it's fast, deterministic and testable, but it only catches
+  phrasings its rules cover. Its rules are in `copilot/winnow.py` and `copilot/roles.py`.
+- Live mode transcribes each chunk separately, so a word cut at a chunk boundary can be misheard.
+- Microphone capture in the browser needs `localhost` or HTTPS.
+- Requests run synchronously in one gunicorn worker with 4 threads, and the models are shared under locks. Live
+  diarization sessions live in that worker's memory, so keep `--workers 1`.
 
 ## Earlier design (gfl-copilot, never pushed) and how this one differs
 

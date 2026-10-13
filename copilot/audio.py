@@ -139,3 +139,12 @@ def split_on_silence(samples: np.ndarray, sr: int = TARGET_SR, max_seconds: floa
         start = cut
     spans.append((start, n))
     return spans
+
+
+def gpu_dtype(device: str):
+    """bfloat16 where the GPU supports it (Ampere and newer), float16 on older cards like the T4, float32 on CPU."""
+    import torch
+
+    if not str(device).startswith("cuda"):
+        return torch.float32
+    return torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16

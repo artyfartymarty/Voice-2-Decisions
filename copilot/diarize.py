@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 from django.conf import settings
 
-from .audio import TARGET_SR, utterances
+from .audio import TARGET_SR, gpu_dtype, utterances
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class NemotronDiarizer:
             from transformers import AutoModelForAudioFrameClassification, AutoProcessor
 
             device = self.device_pref if self.device_pref != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
-            dtype = torch.bfloat16 if device == "cuda" else torch.float32
+            dtype = gpu_dtype(device)
             log.info("Loading %s on %s (%s)", self.model_id, device, dtype)
             self.processor = AutoProcessor.from_pretrained(self.model_id)
             self.processor.set_streaming_mode(self.streaming_mode)

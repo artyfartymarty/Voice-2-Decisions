@@ -8,3 +8,5 @@ venv/
 *.sqlite3
 graphify-out/
 .claude/settings.local.json
+models/
+patches/
