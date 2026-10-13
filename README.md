@@ -20,15 +20,18 @@ Two separate leg files still work, and each leg is then a speaker. That path is 
 
 For setting it up on EC2, read **[HANDOFF.md](HANDOFF.md)**.
 
-## The three use cases
+## The three use cases, built to their Pattern
 
-| Who | Trigger in the call | Tool | What the agent / team gets |
-|---|---|---|---|
-| GP | quote asked for, and both customer (name or account no.) and location (ICAO, IATA, spelled-out letters or FBO name) are known | `quote_lookup` | addressable and total P12M volume, offer range MIN_GPPG to CURRENT_GPPG, location hours and notice; **dispatcher alerted** |
-| Avoiding disputes | quote asked for at a location whose private notes show ≥ `DISPUTE_MIN_COUNT` disputes | `dispute_guidance` | prompt to restate the fees, and ready wording for the quote listing the fees from the public notes |
-| Customer experience | one speaker turns negative (two negative lines in a row, or a low rolling average) | `alert_manager` | **managers alerted in real time**, with which side (caller or agent) and the recent lines |
+| Category | Pattern | Trigger | Tool | What it returns |
+|---|---|---|---|---|
+| GP | Static only, Customer and Location required | quote intent, and both customer and location known | `quote_lookup` (flat-file lookup, no model) | addressable and total volume at the quoted location, other locations the customer operates at, margin reduction range (CURRENT to MIN GPPG); **dispatcher alerted** asking for feedback on the quoted price. Outcome: addressable volume checked and **fed back to Yield** when off; **margin flagged high** with a revised mid-range price |
+| Avoiding Disputes | Single key word, static data search | a location in play plus a keyword (quote, fee, price, callout...) | `dispute_guidance` (notes + dispute list, no model) | fires when the location or the customer is dispute-prone (with rank); prompt to restate fees, and written quote wording. Outcome: get ahead of a credit or rebill |
+| Customer Experience | Sentiment and orchestration | a speaker's sentiment turns negative | `alert_manager` (**sentiment model: Winnow** `/v1/systemone`, lexicon fallback) | prompt to the agent on the call, real-time alert to the designated managers / leads (`MANAGER_WEBHOOKS`) |
 
-Reference data comes from two flat files in `REFERENCE_DIR`, which uses the same columns as the work exports:
+Each result carries a card with the sheet's columns: **Who, Want to see, Outcome, Category** (plus Pattern). The
+summary returns them as `use_cases`, and the call page shows them as a table.
+
+Reference data comes from flat files in `REFERENCE_DIR`, with the same columns as the work exports. `disputes.csv`, `fleet.csv` and `airport_aliases.csv` are optional and synthetic here:
 - `customers.csv`: CUSTOMER_NAME, CUSTOMER_NUMBER, ICAO, P12M_TOTAL_WFS_VOL, P12M_ADDRESSABLE_VOL, MIN_GPPG, CURRENT_GPPG
 - `location_notes.csv`: ICAO, IATA, Country, Region, Supplier, FBO_NUMBER, FBO, Private Notes, Public Notes (messy HTML is fine)
 

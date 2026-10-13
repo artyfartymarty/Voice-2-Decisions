@@ -190,6 +190,11 @@ class Extractor:
         self.customers = {}  # number -> (name, core name)
         for number, name in ref.customer_numbers().items():
             self.customers[number] = (name, SUFFIXES.sub("", name).replace(",", " ").strip())
+        firsts: dict[str, list[str]] = {}
+        for number, (_, core) in self.customers.items():
+            firsts.setdefault(squash(core.split()[0]) if core.split() else "", []).append(number)
+        generic = {"aviation", "air", "jet", "flight", "aero", "global", "executive", "charter"}
+        self.short_names = {w: nums[0] for w, nums in firsts.items() if w and len(nums) == 1 and w not in generic}
         self.place_names = []  # (icao, alias)
         for icao, loc in ref.locations.items():
             if loc.fbo:
@@ -206,6 +211,11 @@ class Extractor:
                 if number in run:
                     return Entity("customer", number, name, 0.98, run)
         toks = words(text)
+        # Short names: callers say "Northwind" for NORTHWIND AVIATION, LLC. Only when that first word is unique.
+        for tok in toks:
+            hit = self.short_names.get(squash(tok))
+            if hit and len(squash(tok)) >= 6:
+                return Entity("customer", hit, self.customers[hit][0], 0.85, tok)
         best = None
         for number, (name, core) in self.customers.items():
             n = len(core.split())

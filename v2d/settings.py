@@ -76,6 +76,16 @@ REFERENCE_DIR = Path(os.environ.get("REFERENCE_DIR") or BASE_DIR / "fixtures" / 
 # Sentiment alert: fire when the average of the last SENTIMENT_WINDOW scored sentences drops to SENTIMENT_ALERT_AT or below.
 SENTIMENT_WINDOW = int(os.environ.get("SENTIMENT_WINDOW", "3"))
 SENTIMENT_ALERT_AT = float(os.environ.get("SENTIMENT_ALERT_AT", "-0.4"))
+# Customer Experience sentiment: winnow (POST {WINNOW_URL}/v1/systemone), lexicon, or auto (winnow if WINNOW_URL is set).
+SENTIMENT_BACKEND = os.environ.get("SENTIMENT_BACKEND", "auto")
+WINNOW_URL = os.environ.get("WINNOW_URL", "")
+WINNOW_API_KEY = os.environ.get("WINNOW_API_KEY", "")
+# Designated managers / leads for real-time sentiment alerts: comma-separated webhook URLs (falls back to NOTIFY_WEBHOOK_URL).
+MANAGER_WEBHOOKS = [u.strip() for u in os.environ.get("MANAGER_WEBHOOKS", "").split(",") if u.strip()]
+# GP: flag the margin as high when CURRENT_GPPG is at least this many times MIN_GPPG.
+MARGIN_HIGH_RATIO = float(os.environ.get("MARGIN_HIGH_RATIO", "3.0"))
+# GP: addressable volume below this share of total P12M volume is flagged for Yield to verify.
+ADDRESSABLE_CHECK_RATIO = float(os.environ.get("ADDRESSABLE_CHECK_RATIO", "0.5"))
 # validate_tail_number fires only for tail numbers extracted with at least this confidence.
 TAIL_MIN_CONFIDENCE = float(os.environ.get("TAIL_MIN_CONFIDENCE", "0.8"))
 # Dispute guidance fires for locations with at least this many disputes in their private notes.

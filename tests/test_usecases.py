@@ -144,7 +144,8 @@ def test_quote_lookup_unknown_site():
 
 
 def test_quote_lookup_zero_addressable_volume_warns():
-    assert "No addressable volume" in usecases.quote_lookup("x", "377205", "KDAL")["note"]
+    res = usecases.quote_lookup("x", "377205", "KDAL")
+    assert res["volume_check"] == "no addressable volume" and "Yield" in res["card"]["outcome"]
 
 
 def test_dispute_guidance_tool():
@@ -204,4 +205,4 @@ def test_live_quote_call_through_api(client):
     assert s["quotes"][0]["customer"] == "NORTHWIND AVIATION, LLC"
     assert Call.objects.get(pk=call["id"]).context["icao"] == "KTEB"
     page = client.get(f"/calls/{call['id']}/").content.decode()
-    assert "0.085–0.3125 GPPG" in page and "High-dispute location" in page and "Managers alerted" in page
+    assert "0.085–0.3125 GPPG" in page and "Dispute risk:" in page and "Use cases" in page and "Managers alerted" in page

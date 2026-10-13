@@ -94,18 +94,13 @@ MIN_CLAUSE_WORDS = 3
 MIN_SCORE = 0.55
 
 QUOTE_INTENT = re.compile(r"\b(quotes?|quoted|quoting|pric(e|es|ing)|how much|per gallon|rates?|cost)\b", _I)
-SENTIMENT = [
-    (re.compile(r"\b(frustrat\w*|annoy\w*|angry|furious|upset|unacceptable|ridiculous|terrible|awful|horrible|disappoint\w*"
-                r"|overcharg\w*|ripped off|rip-?off|waste of|worst|complain\w*|fed up|sick of|never again|not happy|unhappy|hate)\b", _I), -1.0),
-    (re.compile(r"\b(problem|wrong|late|delay(ed)?|too expensive|confus\w*|mistake)\b", _I), -0.5),
-    (re.compile(r"\b(great|perfect|excellent|appreciate\w*|thank(s| you)|wonderful|happy|love|awesome|fantastic|sounds good|glad|helpful)\b", _I), 1.0),
-]
+DISPUTE_KEYWORDS = re.compile(r"\b(quotes?|quoted|quoting|fees?|pric(e|es|ing)|charges?|callout|ramp|handling)\b", _I)
 
 
 def sentiment(text: str) -> float:
-    """Lexicon score in [-1, 1]; 0 means no sentiment words."""
-    total = sum(weight * len(pat.findall(text)) for pat, weight in SENTIMENT)
-    return max(-1.0, min(1.0, total))
+    """Lexicon score in [-1, 1] (tests and fallback; the live path uses sentiment.get_scorer())."""
+    from .sentiment import lexicon_score
+    return lexicon_score(text)
 
 
 @dataclass
@@ -205,12 +200,13 @@ class Winnower:
 
     def __init__(self, pending: str = "", seen: set[str] | None = None, context: dict | None = None,
                  reference=None, sentiment_window: int = 3, sentiment_alert_at: float = -0.4, dispute_min_count: int = 1,
-                 extractor=None):
+                 extractor=None, scorer=None):
         self.pending = pending
         self.seen = set(seen or ())
         self.context = {**new_context(), **(context or {})}
         self._reference = reference
         self._extractor = extractor
+        self.scorer = scorer  # None -> lexicon
         self.sentiment_window = sentiment_window
         self.sentiment_alert_at = sentiment_alert_at
         self.dispute_min_count = dispute_min_count
@@ -249,19 +245,32 @@ class Winnower:
         if QUOTE_INTENT.search(clause):
             ctx["quote_intent"] = True
 
-        if ctx["quote_intent"] and ctx["icao"]:
+        # GP. Pattern "Static only, Customer and Location required": a pure lookup, once both slots are filled.
+        if ctx["quote_intent"] and ctx["icao"] and ctx["customer"]:
             pair = f"{ctx['customer']}:{ctx['icao']}"
-            if ctx["customer"] and pair not in ctx["quoted"]:
+            if pair not in ctx["quoted"]:
                 ctx["quoted"].append(pair)
                 out.append(Moment("quote_request", clause, 0.9, start, end, speaker=speaker,
                                   args={"customer_number": ctx["customer"], "icao": ctx["icao"]}))
-            loc = self.reference.locations.get(ctx["icao"])
-            if loc and loc.dispute_count >= self.dispute_min_count and ctx["icao"] not in ctx["dispute_warned"]:
-                ctx["dispute_warned"].append(ctx["icao"])
-                out.append(Moment("dispute_risk", clause, 0.85, start, end, speaker=speaker, args={"icao": ctx["icao"]}))
 
-        score = sentiment(clause)
-        if score:
+        # Avoiding Disputes. Pattern "Single key word, static data search": a location in play plus a keyword
+        # (quote / fee / price...) looks the location and customer up in the notes and the dispute list.
+        keyword = DISPUTE_KEYWORDS.search(clause) or QUOTE_INTENT.search(clause)
+        if ctx["icao"] and keyword and ctx["icao"] not in ctx["dispute_warned"]:
+            profile = self.reference.dispute_profile(ctx["icao"], ctx["customer"])
+            if max(profile["location_disputes"], profile["customer_disputes"]) >= self.dispute_min_count:
+                ctx["dispute_warned"].append(ctx["icao"])
+                out.append(Moment("dispute_risk", clause, 0.85, start, end, speaker=speaker,
+                                  args={"icao": ctx["icao"], "customer_number": ctx["customer"],
+                                        "keyword": keyword.group(0).lower()}))
+
+        # Customer Experience. Pattern "Sentiment and orchestration": a model scores the line (Winnow when it
+        # is running); routing to the agent and the managers happens in the alert_manager tool.
+        history = [t for _, t in ctx["recent"].get(speaker, [])]
+        judged = self.scorer.score(speaker, clause, history) if self.scorer else {"score": sentiment(clause), "backend": "lexicon"}
+        score = judged["score"]
+        ctx["sentiment_backend"] = judged["backend"]
+        if abs(score) >= 0.2:
             # Tracked per speaker, so a friendly agent doesn't mask an angry caller (and vice versa).
             recent = (ctx["recent"].get(speaker, []) + [[score, clause]])[-self.sentiment_window:]
             ctx["recent"][speaker] = recent
@@ -271,7 +280,8 @@ class Winnower:
             if not ctx["alerted"].get(speaker) and (turned or (sum(s < 0 for s in scores) >= 2 and avg <= self.sentiment_alert_at)):
                 ctx["alerted"][speaker] = True
                 out.append(Moment("sentiment_shift", clause, round(-avg, 2), start, end, speaker=speaker,
-                                  args={"speaker": speaker, "avg_sentiment": round(avg, 2), "recent": [t for _, t in recent]}))
+                                  args={"speaker": speaker, "avg_sentiment": round(avg, 2), "recent": [t for _, t in recent],
+                                        "scored_by": judged["backend"]}))
             elif ctx["alerted"].get(speaker) and avg >= 0:
                 ctx["alerted"][speaker] = False  # recovered: a later downturn alerts again
         return out
@@ -315,6 +325,8 @@ def summarize(moments: list[dict]) -> dict:
         by_kind["action_item"][0]["text"] if by_kind["action_item"] else "No decisions or action items detected.")
     return {
         "headline": headline,
+        # One row per use case that fired, in the sheet's columns: category, who, want_to_see, outcome, pattern.
+        "use_cases": [m["tool_result"]["card"] for m in moments if isinstance(m.get("tool_result"), dict) and m["tool_result"].get("card")],
         "counts": {k: len(v) for k, v in by_kind.items()},
         "decisions": [m["text"] for m in by_kind["decision"]],
         "action_items": [{"text": m["text"], "owner": m.get("owner", ""), "due": m.get("due", "")} for m in by_kind["action_item"]],

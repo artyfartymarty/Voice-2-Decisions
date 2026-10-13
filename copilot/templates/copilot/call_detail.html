@@ -11,6 +11,18 @@
   </div>
 </div>
 
+{% if summary.use_cases %}
+<div class="card">
+  <h2>Use cases</h2>
+  <table>
+    <tr><th>Category</th><th>Who</th><th>Want to see</th><th>Outcome</th></tr>
+    {% for c in summary.use_cases %}
+    <tr><td><b>{{ c.category }}</b><br><span class="muted">{{ c.pattern }}</span></td><td>{{ c.who }}</td><td>{{ c.want_to_see }}</td><td>{{ c.outcome }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Moments</h2>
   <div id="moments">
@@ -33,7 +45,7 @@
       {% elif m.kind == "agent_prompt" %}
         <div class="prompt"><b>Ask the caller:</b> {{ r.message }}</div>
       {% elif m.kind == "sentiment_shift" %}
-        <div class="prompt">Managers alerted: {% if r.speaker %}{{ r.speaker }} {% endif %}sentiment {{ r.avg_sentiment }} over the last few lines.</div>
+        <div class="prompt"><b>{{ r.agent_prompt }}</b><br>Managers alerted: {% if r.speaker %}{{ r.speaker }} {% endif %}sentiment {{ r.avg_sentiment }} over the last few lines{% if r.scored_by %} (scored by {{ r.scored_by }}){% endif %}.</div>
       {% endif %}
       {% endwith %}
     </div>

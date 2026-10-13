@@ -11,7 +11,7 @@ import numpy as np
 from django.conf import settings
 from django.db import transaction
 
-from . import audio, extract, tools
+from . import audio, extract, sentiment, tools
 from .asr import get_backend
 from .audio import TARGET_SR
 from .diarize import close_live_session, get_diarizer, live_session
@@ -36,6 +36,7 @@ def _winnower_for(call: Call) -> Winnower:
         pending=call.pending_text,
         seen={_norm(t) for t in call.moments.values_list("text", flat=True)},
         context=call.context,
+        scorer=sentiment.get_scorer(),
         sentiment_window=settings.SENTIMENT_WINDOW,
         sentiment_alert_at=settings.SENTIMENT_ALERT_AT,
         dispute_min_count=settings.DISPUTE_MIN_COUNT,

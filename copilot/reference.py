@@ -79,9 +79,37 @@ class CustomerSite:
 
 
 @dataclass
+class DisputeRow:
+    customer_number: str
+    icao: str
+    count: int
+    reason: str
+
+
+@dataclass
 class Reference:
     sites: list[CustomerSite] = field(default_factory=list)
     locations: dict[str, Location] = field(default_factory=dict)
+    disputes: list[DisputeRow] = field(default_factory=list)  # optional disputes.csv
+
+    def dispute_profile(self, icao: str | None, customer_number: str | None) -> dict:
+        """How dispute-prone this quote is: location (notes + dispute list), customer (dispute list), and ranks."""
+        loc = self.locations.get(icao or "")
+        by_loc: dict[str, int] = {}
+        by_cust: dict[str, int] = {}
+        for d in self.disputes:
+            by_loc[d.icao] = by_loc.get(d.icao, 0) + d.count
+            by_cust[d.customer_number] = by_cust.get(d.customer_number, 0) + d.count
+        loc_count = max(loc.dispute_count if loc else 0, by_loc.get(icao or "", 0))
+        cust_count = by_cust.get(customer_number or "", 0)
+        rank = lambda counts, key: (sorted(counts.values(), reverse=True).index(counts[key]) + 1) if counts.get(key) else None
+        pair = [d for d in self.disputes if d.icao == icao and d.customer_number == customer_number and d.count]
+        return {
+            "location_disputes": loc_count, "location_rank": rank(by_loc, icao or ""),
+            "customer_disputes": cust_count, "customer_rank": rank(by_cust, customer_number or ""),
+            "this_customer_here": pair[0].count if pair else 0, "top_reason": pair[0].reason if pair else "",
+            "locations_ranked": len(by_loc), "customers_ranked": len(by_cust),
+        }
 
     # --- lookups ---
     def customer_numbers(self) -> dict[str, str]:
@@ -113,6 +141,12 @@ def load(directory: str | Path) -> Reference:
                 supplier=row["Supplier"].strip(), fbo_number=row["FBO_NUMBER"].strip(), fbo=row["FBO"].strip(),
                 private_notes=html_to_text(row["Private Notes"]), public_notes=html_to_text(row["Public Notes"]),
             )
+    path = directory / "disputes.csv"
+    if path.exists():
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                ref.disputes.append(DisputeRow(row["CUSTOMER_NUMBER"].strip(), row["ICAO"].strip().upper(),
+                                               int(row["DISPUTES_P12M"] or 0), (row.get("TOP_REASON") or "").strip()))
     return ref
 
 
