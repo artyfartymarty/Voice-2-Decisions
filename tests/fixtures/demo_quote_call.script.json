@@ -1,0 +1,50 @@
+[
+ {
+  "start": 0.5,
+  "end": 5.138,
+  "speaker": "agent",
+  "text": "Thanks for calling GFL fuel desk, this is Mike. How can I help?"
+ },
+ {
+  "start": 5.831,
+  "end": 11.054,
+  "speaker": "caller",
+  "text": "Hi Mike, this is Dana with Northwind Aviation, account 204511."
+ },
+ {
+  "start": 11.79,
+  "end": 17.401,
+  "speaker": "caller",
+  "text": "We're flying into Van Nuys on Friday morning, and I'd like a fuel quote. What's your price per gallon?"
+ },
+ {
+  "start": 17.971,
+  "end": 21.071,
+  "speaker": "agent",
+  "text": "Sure, let me pull that up for you. Which aircraft is it?"
+ },
+ {
+  "start": 21.537,
+  "end": 23.99,
+  "speaker": "caller",
+  "text": "Tail number November eight eight November Whiskey."
+ },
+ {
+  "start": 24.64,
+  "end": 32.467,
+  "speaker": "agent",
+  "text": "Got it. The ramp fee at Sunset Aviation is waived over a hundred and fifty gallons. I'll send you the quote by end of day."
+ },
+ {
+  "start": 32.968,
+  "end": 34.248,
+  "speaker": "caller",
+  "text": "Perfect, thanks Mike."
+ },
+ {
+  "start": 34.95,
+  "end": 38.147,
+  "speaker": "agent",
+  "text": "Is there anything else I can help with? Have a good flight."
+ }
+]

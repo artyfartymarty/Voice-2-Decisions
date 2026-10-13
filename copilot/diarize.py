@@ -198,8 +198,11 @@ def get_diarizer():
                 _diarizer = FakeDiarizer()
             elif settings.DIARIZER == "nemotron":
                 _diarizer = NemotronDiarizer(settings.DIARIZER_MODEL_ID, settings.ASR_DEVICE, settings.DIARIZER_STREAMING_MODE)
+            elif settings.DIARIZER == "demo":
+                from .demo import DemoDiarizer
+                _diarizer = DemoDiarizer()
             else:
-                raise ValueError(f"Unknown DIARIZER {settings.DIARIZER!r} (use 'nemotron', 'fake' or 'off')")
+                raise ValueError(f"Unknown DIARIZER {settings.DIARIZER!r} (use 'nemotron', 'demo', 'fake' or 'off')")
         return _diarizer
 
 

@@ -60,6 +60,7 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = DATA_UPLOAD_MAX_MEMORY_SIZE
 # ASR_BACKEND:
 #   nemo_speech  the speech service (NeMo-Speech.cpp, English Nemotron Q8 + diarization) at NEMO_SPEECH_URL (fastest)
 #   nemotron     Nemotron 3.5 ASR in this process via Transformers (no extra service; GPU recommended)
+#   demo         no model; transcripts come from <name>.script.json next to each test-call WAV (realistic demos)
 #   fake         no model; tests and CPU-only boxes
 ASR_BACKEND = os.environ.get("ASR_BACKEND", "nemotron")
 NEMO_SPEECH_URL = os.environ.get("NEMO_SPEECH_URL", "http://asr:8080")
@@ -72,10 +73,11 @@ ASR_CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "30"))
 FAKE_ASR_TEXT = os.environ.get("FAKE_ASR_TEXT", "")
 # The server refuses to start with ASR_BACKEND=fake or DIARIZER=fake unless this is set (tests don't need it).
 ALLOW_FAKE_BACKEND = env_bool("ALLOW_FAKE_BACKEND", False)
-# Mono calls: who spoke when. nemotron = nvidia/Nemotron-3-Diarization, fake = tests, off = no speaker labels.
+# Mono calls: who spoke when. nemotron = nvidia/Nemotron-3-Diarization, demo = from the test-call scripts, fake = tests,
+# off = no speaker labels.
 # With ASR_BACKEND=nemo_speech, recordings get speakers from the speech service in the same request; this setting
 # then only drives live calls (whose streaming session keeps speaker IDs stable across chunks).
-DIARIZER = os.environ.get("DIARIZER", "nemotron" if ASR_BACKEND in ("nemotron", "nemo_speech") else "off")
+DIARIZER = os.environ.get("DIARIZER", {"nemotron": "nemotron", "nemo_speech": "nemotron", "demo": "demo"}.get(ASR_BACKEND, "off"))
 DIARIZER_MODEL_ID = os.environ.get("DIARIZER_MODEL_ID", "nvidia/Nemotron-3-Diarization")
 DIARIZER_STREAMING_MODE = os.environ.get("DIARIZER_STREAMING_MODE", "low_latency")  # or very_low_latency, ultra_low_latency
 # Live calls: audio held back mid-word is transcribed anyway after this many seconds without a new chunk (0 = off).

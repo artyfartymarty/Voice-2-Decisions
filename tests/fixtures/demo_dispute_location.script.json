@@ -1,0 +1,50 @@
+[
+ {
+  "start": 0.5,
+  "end": 4.228,
+  "speaker": "agent",
+  "text": "Thanks for calling GFL, this is Mike. How can I help?"
+ },
+ {
+  "start": 4.952,
+  "end": 9.176,
+  "speaker": "caller",
+  "text": "Hi, it's Priya from Blue Heron Jet Charter, account 318842."
+ },
+ {
+  "start": 9.838,
+  "end": 15.939,
+  "speaker": "caller",
+  "text": "We're landing at Paris Le Bourget on Saturday evening, around nine P M local, and we need fuel on arrival."
+ },
+ {
+  "start": 16.638,
+  "end": 18.752,
+  "speaker": "agent",
+  "text": "Okay, let me check Le Bourget for you."
+ },
+ {
+  "start": 19.233,
+  "end": 25.142,
+  "speaker": "caller",
+  "text": "Last time we were charged an overtime fee we weren't expecting. Can you tell me what the fees will be this time?"
+ },
+ {
+  "start": 25.813,
+  "end": 27.647,
+  "speaker": "caller",
+  "text": "And what's your price per gallon there?"
+ },
+ {
+  "start": 28.441,
+  "end": 39.67,
+  "speaker": "agent",
+  "text": "I understand. The FBO is open until ten, so a 9 PM arrival should be inside hours. I'll put the overtime and callout fees in writing on the quote."
+ },
+ {
+  "start": 40.269,
+  "end": 41.719,
+  "speaker": "caller",
+  "text": "Great, that works. Thanks."
+ }
+]

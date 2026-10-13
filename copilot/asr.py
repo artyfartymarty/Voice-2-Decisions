@@ -245,8 +245,11 @@ def get_backend() -> ASRBackend:
                 _backend = NemotronASR(settings.ASR_MODEL_ID, settings.ASR_LANGUAGE, settings.ASR_DEVICE)
             elif settings.ASR_BACKEND == "nemo_speech":
                 _backend = NemoSpeechASR(settings.NEMO_SPEECH_URL, settings.NEMO_SPEECH_API_KEY, settings.ASR_WORD_BOOST)
+            elif settings.ASR_BACKEND == "demo":
+                from .demo import DemoASR
+                _backend = DemoASR()
             else:
-                raise ValueError(f"Unknown ASR_BACKEND {settings.ASR_BACKEND!r} (use 'nemo_speech', 'nemotron' or 'fake')")
+                raise ValueError(f"Unknown ASR_BACKEND {settings.ASR_BACKEND!r} (use 'nemo_speech', 'nemotron', 'demo' or 'fake')")
         return _backend
 
 

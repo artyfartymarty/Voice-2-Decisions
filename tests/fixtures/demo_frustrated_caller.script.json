@@ -1,0 +1,68 @@
+[
+ {
+  "start": 0.5,
+  "end": 5.138,
+  "speaker": "agent",
+  "text": "Thanks for calling GFL fuel desk, this is Mike. How can I help?"
+ },
+ {
+  "start": 5.716,
+  "end": 17.731,
+  "speaker": "caller",
+  "text": "Yeah, this is Dana at Northwind Aviation, account 204511. I'm calling about our Teterboro invoice."
+ },
+ {
+  "start": 18.251,
+  "end": 26.955,
+  "speaker": "caller",
+  "text": "Honestly, I'm really frustrated. You charged us a callout fee again, and that was never agreed."
+ },
+ {
+  "start": 27.436,
+  "end": 34.903,
+  "speaker": "caller",
+  "text": "This is the third time. It's unacceptable, and I'm about ready to take our business elsewhere."
+ },
+ {
+  "start": 35.581,
+  "end": 41.432,
+  "speaker": "agent",
+  "text": "I'm sorry about that, I understand. Let me pull up the invoice. What's your tail number for that trip?"
+ },
+ {
+  "start": 42.043,
+  "end": 44.314,
+  "speaker": "caller",
+  "text": "Tail number is bravo tango."
+ },
+ {
+  "start": 45.11,
+  "end": 48.433,
+  "speaker": "agent",
+  "text": "Sorry, you cut out there. What was the tail number again?"
+ },
+ {
+  "start": 49.181,
+  "end": 52.722,
+  "speaker": "caller",
+  "text": "November five one two bravo tango."
+ },
+ {
+  "start": 53.465,
+  "end": 58.019,
+  "speaker": "agent",
+  "text": "Thank you. I'll raise a dispute on the callout fee and get back to you by end of day."
+ },
+ {
+  "start": 58.487,
+  "end": 66.968,
+  "speaker": "caller",
+  "text": "Fine. I also need a fuel quote at Teterboro for next week, and I want every fee spelled out."
+ },
+ {
+  "start": 67.612,
+  "end": 72.006,
+  "speaker": "agent",
+  "text": "Absolutely. I'll send the quote with the callout and ramp fees listed."
+ }
+]
