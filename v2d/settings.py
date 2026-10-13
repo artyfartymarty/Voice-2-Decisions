@@ -70,6 +70,8 @@ ASR_LANGUAGE = os.environ.get("ASR_LANGUAGE", "en-US")  # a locale such as en-US
 ASR_DEVICE = os.environ.get("ASR_DEVICE", "auto")  # auto | cuda | cpu
 ASR_CHUNK_SECONDS = float(os.environ.get("ASR_CHUNK_SECONDS", "30"))
 FAKE_ASR_TEXT = os.environ.get("FAKE_ASR_TEXT", "")
+# The server refuses to start with ASR_BACKEND=fake or DIARIZER=fake unless this is set (tests don't need it).
+ALLOW_FAKE_BACKEND = env_bool("ALLOW_FAKE_BACKEND", False)
 # Mono calls: who spoke when. nemotron = nvidia/Nemotron-3-Diarization, fake = tests, off = no speaker labels.
 # With ASR_BACKEND=nemo_speech, recordings get speakers from the speech service in the same request; this setting
 # then only drives live calls (whose streaming session keeps speaker IDs stable across chunks).

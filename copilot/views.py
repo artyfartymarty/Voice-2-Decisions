@@ -134,7 +134,10 @@ def healthz(request):
         if diarizer:
             diarizer.load()
     info["tools"] = tools.available()
-    return JsonResponse({"ok": True, "asr": info, "diarizer": diarizer.info() if diarizer else {"backend": "off"}})
+    diarizer_info = diarizer.info() if diarizer else {"backend": "off"}
+    warnings = [f"{what} is the fake one: transcripts are canned text, not what was said"
+                for what, backend in (("the speech model", info), ("the diarizer", diarizer_info)) if backend.get("backend") == "fake"]
+    return JsonResponse({"ok": True, "asr": info, "diarizer": diarizer_info, "fake": bool(warnings), "warnings": warnings})
 
 
 @csrf_exempt
@@ -184,7 +187,7 @@ def api_partial(request, pk):
     except AudioDecodeError as exc:
         return JsonResponse({"error": str(exc)}, status=400)
     return JsonResponse({"new_moments": [m.as_dict() for m in new], "pending_text": call.pending_text,
-                         "status": call.status, "speakers": call.roles})
+                         "status": call.status, "speakers": call.roles, "warnings": call.context.get("warnings", [])})
 
 
 @require_GET

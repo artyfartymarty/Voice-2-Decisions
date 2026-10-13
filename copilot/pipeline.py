@@ -16,6 +16,7 @@ from . import audio, extract, sentiment, tools
 from .asr import get_backend
 from .audio import TARGET_SR
 from .diarize import close_live_session, get_diarizer, live_session
+from .guards import TranscriptCheck
 from .models import Call, Moment, Segment
 from .roles import infer_roles
 from .winnow import Winnower, _norm, summarize
@@ -131,6 +132,12 @@ def process_recording(call: Call, legs: list[bytes], speakers: list[str] | None 
                 by_turn = True
             else:
                 pieces, by_turn = _transcribe_span(samples, 0, len(samples) / TARGET_SR, "", backend, langs), False
+        check = TranscriptCheck(call)
+        for p in pieces:
+            check.heard(p.text)
+        if not pieces and any(audio.utterances(s) for s in decoded):
+            check.warn("no_text", "the recording has speech in it but came back with no text. Check that the speech "
+                                  "service is up.")
         role_info = _roles_for(pieces, fixed_roles)
         with transaction.atomic():
             call.context = {**call.context, "roles": role_info}
@@ -297,8 +304,11 @@ def _process_partial(call: Call, text: str, audio_bytes: bytes | None, final: bo
         if cut:
             spans = (_split_chunk_by_turns(carry_start, ready_end, turns, call.context.get("last_speaker", ""))
                      if session is not None else [(carry_start, ready_end, speaker)])
+            check = TranscriptCheck(call)
             for a, b, spk in spans:
-                t = backend.transcribe(buf[int((a - carry_start) * TARGET_SR): int((b - carry_start) * TARGET_SR)])
+                span = buf[int((a - carry_start) * TARGET_SR): int((b - carry_start) * TARGET_SR)]
+                t = backend.transcribe(span)
+                check.heard(t.text, had_speech=bool(audio.utterances(span)))
                 if t.text:
                     pieces.append(Piece(a, b, spk, t.text))
         call.duration = chunk_end
@@ -351,7 +361,8 @@ def replay_pending(call: Call | None = None) -> int:
 def call_summary(call: Call) -> dict:
     summary = summarize([m.as_dict() for m in call.moments.all()])
     summary.update(call_id=call.pk, title=str(call), status=call.status, duration=round(call.duration, 2),
-                   language=call.language, speakers=call.roles, speaker_roles_confident=call.context.get("roles", {}).get("confident"))
+                   language=call.language, speakers=call.roles, speaker_roles_confident=call.context.get("roles", {}).get("confident"),
+                   warnings=call.context.get("warnings", []))
     return summary
 
 
@@ -361,6 +372,7 @@ def call_payload(call: Call) -> dict:
         "id": call.pk, "title": str(call), "status": call.status, "error": call.error,
         "language": call.language, "duration": round(call.duration, 2), "created_at": call.created_at.isoformat(),
         "transcript": call.transcript, "pending_text": call.pending_text, "context": call.context, "speakers": roles,
+        "warnings": call.context.get("warnings", []),
         "segments": [{"start": s.start, "end": s.end, "speaker": s.speaker, "role": roles.get(s.speaker, s.speaker), "text": s.text}
                      for s in call.segments.all()],
         "moments": [m.as_dict() for m in call.moments.all()],

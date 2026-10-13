@@ -1,0 +1,35 @@
+{
+  "_about": "Golden calls: what each call must and must not trigger. tests/test_golden.py plays each 'script' as text partials (no GPU); `manage.py doctor --golden` streams each 'wav' through the real speech model and live path. Tool args listed under 'expect' must match exactly; 'times' is how often the tool must fire.",
+  "calls": [
+    {
+      "name": "quote_call",
+      "wav": "tests/fixtures/quote_call_phone_mono.wav",
+      "script": [
+        ["A", "Thanks for calling, this is Mark. How can I help?"],
+        ["B", "Hi, this is Dana with Northwind Aviation, account 204511."],
+        ["B", "We're flying into Teterboro, K T E B, on Thursday. I need a fuel quote, what's your price per gallon?"],
+        ["A", "Let me pull that up for you."],
+        ["B", "Honestly I'm frustrated, last time we were overcharged on the callout fee."],
+        ["B", "That was unacceptable and really disappointing."],
+        ["A", "I understand. I will send you the quote with every fee listed by end of day."]
+      ],
+      "expect": [
+        {"tool": "quote_lookup", "args": {"customer_number": "204511", "icao": "KTEB"}, "times": 1},
+        {"tool": "dispute_guidance", "args": {"icao": "KTEB"}, "times": 1},
+        {"tool": "alert_manager", "args": {"speaker": "caller"}, "times": 1}
+      ],
+      "roles": ["agent", "caller"]
+    },
+    {
+      "name": "no_quote_call",
+      "script": [
+        ["A", "Thanks for calling, this is Mark. How can I help?"],
+        ["B", "Hi, this is Dana with Northwind Aviation. We land at KTEB on Thursday."],
+        ["B", "Just letting you know the crew will need a car at the FBO. Thanks, that's great."],
+        ["A", "Happy to help. I will book the car today."]
+      ],
+      "expect": [],
+      "forbid": ["quote_lookup", "dispute_guidance", "alert_manager"]
+    }
+  ]
+}

@@ -91,6 +91,24 @@ The first build compiles Winnow, which takes several minutes. The first start do
 
 ## 5. Run the tests
 
+One command checks everything with a PASS/FAIL line per step and exits non-zero on any failure:
+
+```bash
+docker compose --profile test run --rm test python scripts/check.py   # code only, no GPU
+docker compose exec web python scripts/check.py --stack                # plus doctor --golden on the real models
+```
+
+`python manage.py doctor` (part of `--stack`) checks config, secret key, migrations, reference data, GPU and
+driver, the speech service, Winnow, and probes the speech model with two turns of a test call. It fails if the
+text is empty, the same for both turns, or the fake model's canned paragraph. `--golden` also streams the golden
+calls in `tests/golden/calls.json` through the live path and checks the tool calls each one must fire.
+
+The server also refuses to start with `ASR_BACKEND=fake` or `DIARIZER=fake` unless `ALLOW_FAKE_BACKEND=1` is set,
+and a live call gets a `warnings` entry (in the partial response, the call and the summary) when the transcript
+repeats the same text 3 times in a row or speech comes back empty 3 times in a row.
+
+The individual steps:
+
 ```bash
 # a) Fast suite: rules, extractor, tail slot, use cases, API, live carry, clients (servers mocked). No GPU.
 #    Expect: all passed, a handful skipped (the GPU tests).

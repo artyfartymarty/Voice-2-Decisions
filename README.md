@@ -72,6 +72,8 @@ same page still uploads a whole recording or records live from the microphone.
 ## Tests
 
 ```bash
+docker compose --profile test run --rm test python scripts/check.py   # everything without a GPU, PASS/FAIL per step
+docker compose exec web python scripts/check.py --stack          # plus `manage.py doctor --golden` on the real models
 docker compose --profile test run --rm test                      # fast suite, no GPU or model needed
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml --profile test run --rm -e RUN_GPU_TESTS=1 test pytest -v -s -rs tests/test_gpu_nemotron.py
 docker compose exec web sh scripts/smoke_test.sh                 # end to end against the running server
