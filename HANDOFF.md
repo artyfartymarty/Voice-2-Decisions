@@ -153,6 +153,25 @@ Measure real calls with step 5f and `stream_wav.py` before relying on the alerts
 Not yet measured: Winnow-12B against E2B on the same set (the 12B download finished after a GPU pause), and the
 14 s cold start of the first live request (the warm-up step still to add).
 
+## Knowledge graph (graphify)
+
+The repo is set up for [graphify](https://github.com/safishamsi/graphify), which maps the code, docs, Django
+templates and compose files into a queryable knowledge graph for Claude Code. `CLAUDE.md` tells Claude to query it
+before answering codebase questions. The graph itself (`graphify-out/`) is not committed, so build it once per checkout:
+
+```bash
+pipx install graphifyy        # or: uv tool install graphifyy / pip install graphifyy
+/graphify .                   # in Claude Code: full build (code AST + a semantic pass over docs/templates)
+graphify update .             # after code changes: AST-only refresh, no LLM, no cost
+graphify hook install         # optional: rebuild automatically after every commit
+graphify claude install       # optional: adds per-machine search hooks in .claude/settings.json (keep them local)
+graphify query "how does a live chunk reach the sentiment alert?"   # ask the graph
+```
+
+On the author's PC the first build produced 633 nodes, 1,442 edges and 33 communities, with the Django UI
+(templates, views, URLs) in its own communities. After pulling UI changes, run `/graphify . --update`, so the
+changed templates get their semantic pass too.
+
 ## Troubleshooting
 
 | Symptom | Fix |
