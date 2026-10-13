@@ -74,7 +74,13 @@ class WinnowDecider:
                     "instructions": f"The caller's speech was transcribed as \"{u['heard']}\". Which "
                                     f"{UNSURE_WHAT.get(var, var)} did they mean?",
                     "criteria": {**u["options"], "none": "none of these"},
-                } for var, u in (unsure or {}).items() if u.get("options")},
+                } for var, u in (unsure or {}).items() if isinstance(u, dict) and u.get("options")},
+                # Asked only when a tail-number fallback is configured and the parser found no tail in this line.
+                **({"tail_said": {
+                    "type": "noul",
+                    "instructions": "In their latest line, did the caller say a complete aircraft tail number "
+                                    "(registration), all of its letters and digits?",
+                }} if (unsure or {}).get("tail_said") else {}),
             },
         }
 
@@ -103,6 +109,8 @@ class WinnowDecider:
         for key, a in answers.items():
             if key.startswith("which_") and a.get("choice") not in (None, "none"):
                 settled[key[len("which_"):]] = {"value": a["choice"], "p": round(float((a.get("probabilities") or {}).get(a["choice"], 0)), 3)}
+        if "tail_said" in answers:
+            settled["tail_said"] = float(answers["tail_said"].get("noul", 0.0))
         return {"function": None if pick == "none" else pick, "p": round(probs.get(pick, answer.get("confidence", 0.0)), 3),
                 "confidence": answer.get("confidence"), "probabilities": probs, "by": self.name, "variables": settled,
                 "ms": round((time.perf_counter() - t0) * 1000)}

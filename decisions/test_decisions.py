@@ -124,6 +124,7 @@ class Engine(unittest.TestCase):
 
 class FakeWinnow(BaseHTTPRequestHandler):
     pick = "fuel_quote"
+    tail_said = 0.9
     which = {}  # "which_customer_number" -> the option to pick (default: the first, i.e. the fuzzy match)
     seen = []
 
@@ -137,6 +138,8 @@ class FakeWinnow(BaseHTTPRequestHandler):
             if qid.startswith("which_"):
                 pick = self.which.get(qid, next(iter(q["criteria"])))
                 answers[qid] = {"type": "choice", "choice": pick, "probabilities": {k: 0.9 if k == pick else 0.02 for k in q["criteria"]}}
+        if "tail_said" in body["questions"]:
+            answers["tail_said"] = {"type": "noul", "noul": self.tail_said}
         out = json.dumps({"answers": answers}).encode()
         self.send_response(200)
         self.send_header("Content-Length", str(len(out)))
@@ -198,6 +201,44 @@ class Winnow(unittest.TestCase):
             FakeWinnow.which = {}
         self.assertEqual(call.variables["customer_number"]["value"], "377205")
         self.assertEqual(out["decision"]["result"]["customer_number"], "377205")
+
+    def test_tail_fallback_normalizer(self):
+        class Normalizer:  # stands in for the external model; records what it was asked
+            def __init__(self, answer):
+                self.answer, self.asked = answer, []
+
+            def normalize(self, text, recent):
+                self.asked.append(text)
+                return self.answer
+
+        # The parser can't read "one two three ay bee"; Winnow says a full tail was said; the normalizer reads it.
+        norm = Normalizer("N123AB")
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm)
+        call.feed("caller", "The tail is one two three ay bee.")
+        self.assertIn("tail_said", FakeWinnow.seen[-1]["questions"])
+        self.assertEqual(call.variables["tail_number"]["value"], "N123AB")
+        self.assertEqual(len(norm.asked), 1)
+
+        # Not asked when the parser already got it, or when Winnow says no full tail was said.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm)
+        call.feed("caller", "Tail number November eight eight November whiskey.")
+        self.assertNotIn("tail_said", FakeWinnow.seen[-1]["questions"])
+        FakeWinnow.tail_said = 0.1
+        try:
+            Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=norm).feed("caller", "The tail is one two three.")
+        finally:
+            FakeWinnow.tail_said = 0.9
+        self.assertEqual(len(norm.asked), 1)
+
+        # Its answer is validated: not a registration, or not on the customer's fleet -> not used.
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=Normalizer("HELLO1"))
+        call.feed("caller", "The tail is one two three ay bee.")
+        self.assertNotIn("tail_number", call.variables)
+        call = Call("t", EXTRACTOR, WinnowDecider(self.url), normalizer=Normalizer("N123AB"))
+        call.feed("caller", "Northwind, account 204511.")
+        out = call.feed("caller", "The tail is one two three ay bee.")
+        self.assertNotIn("tail_number", call.variables)
+        self.assertIn("isn't on file", out["prompts"][-1])
 
     def test_unreachable_winnow_falls_back_to_rules(self):
         call = Call("t", EXTRACTOR, WinnowDecider("http://127.0.0.1:9", timeout=0.5))

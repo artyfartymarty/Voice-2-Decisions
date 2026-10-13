@@ -152,6 +152,10 @@ the API while Winnow is loading or if it stops answering.
 - **Real data:** put `customers.csv`, `location_notes.csv` (and optionally `disputes.csv`, `fleet.csv`,
   `airport_aliases.csv`) in `decisions/reference`, uncomment the volume in `docker-compose.yml`, set
   `REFERENCE_DIR=/reference`.
+- **Tail-number fallback (optional, off by default):** set `TAIL_NORMALIZER_URL` (and `TAIL_NORMALIZER_MODEL` for an
+  OpenAI-compatible endpoint) to call an external model when Winnow says the caller just said a complete tail number
+  but the parser found none in that line. Whatever it returns must still be a valid registration and, if the customer
+  has a fleet on file, one of their tails; otherwise the agent is asked to confirm. See `normalizer.py`.
 - **How sure Winnow must be:** `DECIDE_MIN_P` (default 0.5).
 - **Fuzzy names:** customer and location are matched against the reference lists first. When a match came from a heard
   name rather than an exact code or account number, the same Winnow request also asks "which customer / airport did
@@ -163,6 +167,7 @@ the API while Winnow is loading or if it stops answering.
 | `events.py` | Nova Sonic / plain events -> (speaker, text, final) |
 | `engine.py` | one call: variables, auto-calling, decisions |
 | `functions.py` | the functions and the variables they need |
+| `normalizer.py` | optional external model for tail numbers the parser can't read |
 | `decider.py` | Winnow-12B `choice` question on `/v1/systemone`, keyword fallback |
 | `server.py`, `console.html` | the HTTP API and the console |
 | `replay.py` | feed a script, Nova events or typed lines |

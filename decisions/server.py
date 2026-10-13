@@ -24,6 +24,7 @@ from pathlib import Path
 from . import decider as decider_mod
 from .engine import Call, load_extractor
 from .events import EventReader
+from .normalizer import from_env as normalizer_from_env
 from .functions import FUNCTIONS
 
 log = logging.getLogger("decisions")
@@ -38,6 +39,7 @@ class App:
         self.extractor = load_extractor(ref_dir, float(env.get("TAIL_MIN_CONFIDENCE", "0.8")))
         self.decider = decider_mod.from_env(env)
         self.min_p = float(env.get("DECIDE_MIN_P", "0.5"))
+        self.normalizer = normalizer_from_env(env)
         self.webhook = env.get("DECISION_WEBHOOK_URL", "")
         self.calls: dict[str, tuple[Call, EventReader, threading.Lock]] = {}
         self.lock = threading.Lock()
@@ -45,7 +47,7 @@ class App:
     def call(self, call_id: str):
         with self.lock:
             if call_id not in self.calls:
-                self.calls[call_id] = (Call(call_id, self.extractor, self.decider, self.min_p), EventReader(), threading.Lock())
+                self.calls[call_id] = (Call(call_id, self.extractor, self.decider, self.min_p, normalizer=self.normalizer), EventReader(), threading.Lock())
             return self.calls[call_id]
 
     def events(self, call_id: str, payload) -> dict:

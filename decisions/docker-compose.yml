@@ -42,6 +42,9 @@ services:
       ROLE_MAP: ${ROLE_MAP:-USER:caller,ASSISTANT:agent}
       DECISION_WEBHOOK_URL: ${DECISION_WEBHOOK_URL:-}
       REFERENCE_DIR: ${REFERENCE_DIR:-}
+      TAIL_NORMALIZER_URL: ${TAIL_NORMALIZER_URL:-}
+      TAIL_NORMALIZER_MODEL: ${TAIL_NORMALIZER_MODEL:-}
+      TAIL_NORMALIZER_API_KEY: ${TAIL_NORMALIZER_API_KEY:-}
     ports:
       - "${PORT:-8000}:8000"
     # Real reference data: put customers.csv + location_notes.csv (+ disputes.csv, fleet.csv, airport_aliases.csv)

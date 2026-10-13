@@ -26,9 +26,9 @@ SENTENCE = re.compile(r"(?<=[.!?])\s+")
 
 
 class Call:
-    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",)):
+    def __init__(self, call_id: str, extractor, decider, min_p: float = 0.5, decide_on=("caller",), normalizer=None):
         self.id = call_id
-        self.extractor, self.decider = extractor, decider
+        self.extractor, self.decider, self.normalizer = extractor, decider, normalizer
         self.min_p, self.decide_on = min_p, set(decide_on)
         self.variables: dict[str, dict] = {}  # name -> {value, label, confidence, heard, speaker}
         self.tail_slot = slots.new_slot()
@@ -86,10 +86,27 @@ class Call:
         ranked = sorted(best.items(), key=lambda kv: -kv[1][0])[:top]
         return {"heard": match.evidence, "options": {value: label for value, (score, label) in ranked if score >= 0.3}}
 
+    def _normalize_tail(self, text: str, speaker: str, prompts: list[str]) -> list[str]:
+        """Winnow heard a full tail the parser missed: ask the external normalizer, then validate what it returns."""
+        tail = self.normalizer.normalize(text, [f"{l['speaker']}: {l['text']}" for l in self.transcript[-4:-1]])
+        country = extract.registration_country(tail or "")
+        if not country:
+            return []
+        fleet = self.extractor.fleet.get(self.variables.get("customer_number", {}).get("value") or "", set())
+        if fleet and tail not in fleet:
+            msg = f"Tail {tail} isn't on file for this customer. Confirm it with the caller."
+            prompts.append(msg)
+            self.prompts.append(msg)
+            return []
+        self.tail_slot.update(value=tail, partial="", partial_by="", pending=False)
+        return ["tail_number"] if self._set("tail_number", tail, country, 0.8, text, speaker) else []
+
     def _settle(self, picks: dict, speaker: str) -> list[str]:
         """Apply Winnow's answers to this line's unsure matches (a pick of "none" keeps the fuzzy match)."""
         changed = []
         for var, pick in (picks or {}).items():
+            if not isinstance(pick, dict):
+                continue
             unsure = self._unsure.get(var)
             if unsure and pick["value"] in unsure["options"] and pick["p"] >= self.min_p:
                 if self._set(var, pick["value"], unsure["options"][pick["value"]], pick["p"], unsure["heard"], speaker):
@@ -151,8 +168,14 @@ class Call:
         decision = None
         if speaker in self.decide_on:
             # One model request: what the caller wants, plus which customer / location they meant if the match was fuzzy.
+            ask_tail = (self.normalizer is not None and "tail_number" not in changed
+                        and bool(slots.TAIL_TALK.search(line["text"]) or self.tail_slot["pending"] or self.tail_slot["partial"]))
+            if ask_tail:
+                self._unsure["tail_said"] = True
             picked = self.decider.decide(line["text"], self.transcript, self.variables, self._unsure)
             settled = self._settle(picked.get("variables"), speaker)
+            if ask_tail and (picked.get("variables") or {}).get("tail_said", 0.0) >= self.min_p:
+                settled += self._normalize_tail(line["text"], speaker, prompts)
             if settled:
                 changed += [v for v in settled if v not in changed]
                 fired += self._autocall()
